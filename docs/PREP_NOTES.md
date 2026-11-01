@@ -16,7 +16,7 @@
 
 **Spikes réussis :**
 - `pnpm spike:1click` : 210 tokens ; devis dry 1 wNEAR → 4,2480 USDC (4,26 $ en entrée), 408 ms, sans clé. `minAmountOut` = −0,5 % (slippage demandé). Coût observé ≈ 0,3 % (frais sans JWT inclus).
-- `pnpm spike:near` : FC key ajoutée au compte agent (scope `guestbook.near-examples.testnet` / `add_message`, allowance 0,25 NEAR). Résultats : appel autorisé OK ; +1 yocto → « Deposit is not allowed with function call » ; autre contrat → « Access key receiver … does not match ». À vérifier : le refus du dépôt vient-il du client (near-api-js) ou de la chaîne ? Pour la démo « preuve on-chain », il faudra un rejet visible on-chain.
+- `pnpm spike:near` : FC key ajoutée au compte agent (scope `guestbook.near-examples.testnet` / `add_message`, allowance 0,25 NEAR). Résultats : appel autorisé OK ; +1 yocto → « Deposit is not allowed with function call » ; autre contrat → « Access key receiver … does not match ». Vérifié : le message vient du module `rpc-errors` de near-api-js (traduction d'une erreur renvoyée par le nœud) → c'est **le protocole qui rejette** la transaction invalide, pas une vérification côté client.
 - Choix techniques : pnpm workspaces, TypeScript 6.0.3 (TS 7.0 sorti le 1er nov, évité), near-api-js 7.4.0, tsx.
 
 Recherche doc faite avant le démarrage du code (1er nov 00:00 UTC). Aucune ligne de code projet écrite.
