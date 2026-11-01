@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=./schema.json
+# Circuit Breaker — default risk policy for the demo agent.
+# Rules are evaluated in this order; the first breach blocks the order.
+version: 1
+
+# 1. Kill-switch: block everything.
+killSwitch: false
+
+# 2. Tradable assets (symbols as listed by the NEAR Intents 1Click API).
+allowedAssets: [wNEAR, USDC, ETH]
+
+# 3. Max size of one order, % of equity.
+maxOrderPct: 10
+
+# 4. Max exposure to one asset after the order (leverage included), % of equity.
+maxExposurePct: 30
+
+# 5. Max leverage (1 = spot only).
+maxLeverage: 1
+
+# 6. Daily loss limit, % of equity at UTC day start: new orders blocked until reset.
+maxDailyLossPct: 5
+
+# 7. Max drawdown from peak equity, %: triggers the kill-switch.
+maxDrawdownPct: 15
+
+# 8. Max orders in any rolling hour (anti runaway loop).
+maxOrdersPerHour: 12
+
+# 9. Max quote cost, basis points ((amountInUsd - amountOutUsd) / amountInUsd).
+maxSlippageBps: 100
+
+# 10. Allowed trading windows, UTC. Start inclusive, end exclusive. Empty = always.
+tradingWindowsUtc: []

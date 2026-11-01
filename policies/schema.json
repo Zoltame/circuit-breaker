@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "killSwitch": {
+      "default": false,
+      "description": "Rule 1: when true, every order is blocked",
+      "type": "boolean"
+    },
+    "allowedAssets": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Rule 2: tradable asset symbols"
+    },
+    "maxOrderPct": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100,
+      "description": "Rule 3: max order notional, % of equity"
+    },
+    "maxExposurePct": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100,
+      "description": "Rule 4: max exposure per asset after the order (incl. leverage), % of equity"
+    },
+    "maxLeverage": {
+      "type": "number",
+      "minimum": 1,
+      "description": "Rule 5: max leverage, x"
+    },
+    "maxDailyLossPct": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100,
+      "description": "Rule 6: at this loss since UTC day start, new orders are blocked"
+    },
+    "maxDrawdownPct": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100,
+      "description": "Rule 7: at this drawdown from peak, the kill-switch is activated"
+    },
+    "maxOrdersPerHour": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Rule 8: max allowed orders in any rolling hour"
+    },
+    "maxSlippageBps": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Rule 9: max quote cost (in vs out USD), basis points"
+    },
+    "tradingWindowsUtc": {
+      "default": [],
+      "description": "Rule 10: allowed UTC windows, start inclusive, end exclusive; empty = always",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "sun",
+                "mon",
+                "tue",
+                "wed",
+                "thu",
+                "fri",
+                "sat"
+              ]
+            }
+          },
+          "start": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "end": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "allowedAssets",
+    "maxOrderPct",
+    "maxExposurePct",
+    "maxLeverage",
+    "maxDailyLossPct",
+    "maxDrawdownPct",
+    "maxOrdersPerHour",
+    "maxSlippageBps"
+  ],
+  "additionalProperties": false
+}
