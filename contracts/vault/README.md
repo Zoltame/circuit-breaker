@@ -1,63 +1,46 @@
-# Basic Auction Contract 
+# Circuit Breaker vault
 
-This directory contains a Rust contract that is used as part of the [Basic Auction Tutorial](https://docs.near.org/tutorials/auction/basic-auction).
+NEAR smart contract (Rust, near-sdk 5.29) that holds an AI agent's trading funds and enforces hard
+limits on-chain. It is layer 2 of Circuit Breaker: it keeps holding if the off-chain policy engine
+is bypassed or compromised.
 
-The contract is a simple auction where you can place bids, view the highest bid, and claim the tokens at the end of the auction.
+## Roles
 
-This repo showcases the basic anatomy of a smart contract application on NEAR Protocol that showcases how to store data in a contract, how to update the state, and then how to read it.
-There are also unit tests, integration tests, and CI/CD pipelines preconfigured for your reference.
+| Role | Can | Cannot |
+|---|---|---|
+| owner | set per-token caps, whitelist venues, set/release kill-switch, withdraw, change agent | — |
+| agent | `execute_order` within caps to a whitelisted venue, `trip_kill_switch` | release the kill-switch, change caps, withdraw, anything else |
 
----
+The agent account holds **only a function-call access key** with
+`receiver_id = <vault>` and `method_names = [execute_order, trip_kill_switch]`. NEAR itself then refuses,
+before the contract runs: calls to other methods or contracts, attached deposits, NEAR transfers,
+key management. The vault attaches the NEP-141 1 yoctoNEAR itself when it moves tokens.
 
-## How to Build Locally?
+Limits of that key (NEAR protocol): its `allowance` covers gas only and the key is unusable once
+spent; an account that has only function-call keys cannot transfer NEAR or add keys.
 
-Install [`cargo-near`](https://github.com/near/cargo-near) and run:
+## Checks in `execute_order` (first failure panics with `CB_BLOCKED:<rule>`)
 
-```bash
-cargo near build
-```
+1. caller is the agent
+2. `kill_switch` is off
+3. token is whitelisted (`near` = native NEAR, otherwise a NEP-141 contract id)
+4. venue is whitelisted
+5. `amount <= max_per_order`
+6. spent today + amount `<= max_per_day` (UTC day; given back if the transfer fails)
 
-## How to Test Locally?
+With `msg`, NEP-141 tokens are sent with `ft_transfer_call` (e.g. a deposit into `intents.near` on
+mainnet); without it, `ft_transfer`. Native NEAR uses a plain transfer.
 
-```bash
-cargo test
-```
-
-## How to Deploy?
-
-Deployment is automated with GitHub Actions CI/CD pipeline.
-To deploy manually, install [`cargo-near`](https://github.com/near/cargo-near) and run:
-
-If you deploy for debugging purposes:
-
-```bash
-cargo near deploy build-non-reproducible-wasm
-```
-
-If you deploy production ready smart contract:
+## Build and test (Docker, any OS)
 
 ```bash
-cargo near deploy build-reproducible-wasm
+pnpm contract test    # 14 unit tests + sandbox integration test
+pnpm contract build   # -> contracts/vault/out/vault.wasm
 ```
 
-## Initialize the contract
+## Deploy on testnet and try to break it
 
 ```bash
-# on Linux / Windows WSL
-TWO_MINUTES_FROM_NOW=$(date -d '+2 minutes' +%s000000000)
-# on MacOS
-TWO_MINUTES_FROM_NOW=$(date -v+2M +%s000000000)
-
-near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' init json-args '{"end_time": "'$TWO_MINUTES_FROM_NOW'", "auctioneer": "<AUCTIONEER_ACCOUNT_ID>"}' prepaid-gas '30.0 Tgas' attached-deposit '0 NEAR'
+pnpm vault:deploy 1 3   # deploy, cap 1 NEAR/order and 3 NEAR/day, new agent key -> .env
+pnpm vault:attack       # 1 legit order succeeds, 7 bypass attempts fail (on-chain or by the protocol)
 ```
-
-## Useful Links
-
-- [cargo-near](https://github.com/near/cargo-near) - NEAR smart contract development toolkit for Rust
-- [near CLI](https://near.cli.rs) - Interact with NEAR blockchain from command line
-- [NEAR Rust SDK Documentation](https://docs.near.org/sdk/rust/introduction)
-- [NEAR Documentation](https://docs.near.org)
-- [NEAR StackOverflow](https://stackoverflow.com/questions/tagged/nearprotocol)
-- [NEAR Discord](https://near.chat)
-- [NEAR Telegram Developers Community Group](https://t.me/neardev)
-- NEAR DevHub: [Telegram](https://t.me/neardevhub), [Twitter](https://twitter.com/neardevhub)

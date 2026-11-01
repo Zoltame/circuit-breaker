@@ -10,7 +10,6 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "spike:1click": "tsx --env-file-if-exists=.env scripts/spike-1click.ts",
-    "spike:near": "tsx --env-file-if-exists=.env scripts/spike-near.ts",
     "agent": "tsx --env-file-if-exists=.env scripts/run-agent.ts",
     "propose": "tsx --env-file-if-exists=.env scripts/propose.ts",
     "contract": "tsx scripts/contract.ts",
