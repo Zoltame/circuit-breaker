@@ -1,0 +1,30 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+**/credentials/*.json
+
+# Dependencies & builds
+node_modules/
+dist/
+.next/
+.vercel/
+target/
+*.tsbuildinfo
+
+# Runtime data
+data/
+*.jsonl
+*.sqlite
+*.sqlite-journal
+
+# Submission payload (contains personal data)
+submission*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
