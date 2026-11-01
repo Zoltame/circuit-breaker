@@ -31,7 +31,7 @@ export interface Quoter {
 }
 
 export interface OneClickOptions {
-  baseUrl?: string;
+  baseUrl?: string | undefined;
   /** Partner JWT, sent as X-API-Key. Optional: without it 1Click adds a platform fee. */
   jwt?: string | undefined;
   /** Account used as routing metadata in dry quotes. Nothing is signed or sent to it. */

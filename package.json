@@ -10,9 +10,14 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "spike:1click": "tsx --env-file-if-exists=.env scripts/spike-1click.ts",
-    "spike:near": "tsx --env-file-if-exists=.env scripts/spike-near.ts"
+    "spike:near": "tsx --env-file-if-exists=.env scripts/spike-near.ts",
+    "agent": "tsx --env-file-if-exists=.env scripts/run-agent.ts",
+    "propose": "tsx --env-file-if-exists=.env scripts/propose.ts"
   },
   "devDependencies": {
+    "@circuit-breaker/agent": "workspace:*",
+    "@circuit-breaker/executor": "workspace:*",
+    "@circuit-breaker/policy-engine": "workspace:*",
     "@types/node": "^24.0.0",
     "near-api-js": "7.4.0",
     "tsx": "4.23.15",
