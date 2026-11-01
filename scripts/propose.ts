@@ -3,7 +3,7 @@
 // Example: pnpm propose buy wNEAR 500 --onchain
 
 import type { Side } from "@circuit-breaker/policy-engine";
-import { buildBreaker } from "./lib/breaker.ts";
+import { buildBreaker } from "@circuit-breaker/executor";
 
 const onchain = process.argv.includes("--onchain");
 const [side, asset, notional, leverage] = process.argv.slice(2).filter((a) => !a.startsWith("--"));

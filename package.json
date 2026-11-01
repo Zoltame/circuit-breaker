@@ -14,7 +14,8 @@
     "propose": "tsx --env-file-if-exists=.env scripts/propose.ts",
     "contract": "tsx scripts/contract.ts",
     "vault:deploy": "tsx --env-file=.env scripts/vault-deploy.ts",
-    "vault:attack": "tsx --env-file=.env scripts/vault-attack.ts"
+    "vault:attack": "tsx --env-file=.env scripts/vault-attack.ts",
+    "dashboard": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts"
   },
   "devDependencies": {
     "@circuit-breaker/agent": "workspace:*",

@@ -1,0 +1,245 @@
+// Circuit Breaker dashboard server. One process owns the CircuitBreaker (and optionally runs the agent),
+// streams journal events to browsers over SSE, and exposes the kill-switch and red-team actions.
+//
+// Usage: pnpm dashboard [--onchain] [--agent] [--port 8787]
+
+import { createReadStream, existsSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
+import { momentum, runAgent } from "@circuit-breaker/agent";
+import {
+  JOURNAL_FILE,
+  PaperBroker,
+  buildBreaker,
+  type Journal,
+  type JournalEvent,
+  type VaultConfig,
+} from "@circuit-breaker/executor";
+import type { Side } from "@circuit-breaker/policy-engine";
+
+const args = process.argv.slice(2);
+const flag = (name: string) => args.includes(`--${name}`);
+const portArg = args.indexOf("--port");
+const port = Number((portArg >= 0 ? args[portArg + 1] : undefined) ?? process.env.PORT ?? 8787);
+const PUBLIC = fileURLToPath(new URL("../public/", import.meta.url));
+const START_CASH = 10_000;
+
+// ---------------------------------------------------------------- live journal
+
+const recent: JournalEvent[] = [];
+const clients = new Set<ServerResponse>();
+
+function broadcast(kind: string, data: unknown): void {
+  const msg = `event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const c of clients) c.write(msg);
+}
+
+const tee = (inner: Journal): Journal => ({
+  append(ev) {
+    inner.append(ev);
+    recent.push(ev);
+    if (recent.length > 500) recent.shift();
+    void account().then((acc) => broadcast("journal", { event: ev, account: acc }));
+  },
+  read: () => inner.read(),
+});
+
+const { breaker, broker, vault } = buildBreaker({ onchain: flag("onchain"), wrapJournal: tee });
+recent.push(...breaker.journalTail(200));
+
+// ---------------------------------------------------------------- account view
+
+async function account() {
+  const { prices } = await breaker.prices();
+  const s = broker.mark(prices, Date.now());
+  const p = breaker.policy;
+  const pct = (a: number, b: number) => (b > 0 ? (a / b) * 100 : 0);
+  return {
+    equityUsd: s.equityUsd,
+    startUsd: START_CASH,
+    cashUsd: broker.state.cashUsd,
+    peakEquityUsd: s.peakEquityUsd,
+    drawdownPct: pct(s.peakEquityUsd - s.equityUsd, s.peakEquityUsd),
+    dailyLossPct: Math.max(0, pct(s.dayStartEquityUsd - s.equityUsd, s.dayStartEquityUsd)),
+    ordersLastHour: s.recentOrderTimes.length,
+    exposurePct: Object.fromEntries(Object.entries(s.positionsUsd).map(([a, v]) => [a, pct(v, s.equityUsd)])),
+    holdings: broker.state.holdings,
+    prices,
+    killSwitch: s.killSwitch,
+    limits: {
+      maxDrawdownPct: p.maxDrawdownPct,
+      maxDailyLossPct: p.maxDailyLossPct,
+      maxOrdersPerHour: p.maxOrdersPerHour,
+      maxExposurePct: p.maxExposurePct,
+    },
+  };
+}
+
+let vaultCache: { at: number; cfg: VaultConfig | null } = { at: 0, cfg: null };
+async function vaultConfig(): Promise<VaultConfig | null> {
+  if (!vault) return null;
+  if (Date.now() - vaultCache.at < 4_000) return vaultCache.cfg;
+  try {
+    vaultCache = { at: Date.now(), cfg: await vault.getConfig() };
+  } catch {
+    // keep the last known config
+  }
+  return vaultCache.cfg;
+}
+
+// ---------------------------------------------------------------- red team
+
+const RED_TEAM: Record<string, { label: string; run: () => Promise<unknown> }> = {
+  oversize: {
+    label: "Oversized order (25% of equity)",
+    run: async () => {
+      const eq = (await account()).equityUsd;
+      return breaker.submit({ agentId: "red-team", side: "buy", asset: "wNEAR", notionalUsd: Math.round(eq * 0.25) });
+    },
+  },
+  unlisted: {
+    label: "Buy a token outside the whitelist",
+    run: () => breaker.submit({ agentId: "red-team", side: "buy", asset: "PEPE", notionalUsd: 200 }),
+  },
+  leverage: {
+    label: "5x leverage",
+    run: () => breaker.submit({ agentId: "red-team", side: "buy", asset: "wNEAR", notionalUsd: 200, leverage: 5 }),
+  },
+  loop: {
+    label: "Runaway loop (15 orders in a row)",
+    run: async () => {
+      for (let i = 0; i < 15; i++) await breaker.submit({ agentId: "red-team", side: "buy", asset: "wNEAR", notionalUsd: 50 });
+    },
+  },
+  bypass: {
+    label: "Skip the engine: call the vault directly for $10,000",
+    run: async () => {
+      if (!vault) throw new Error("Start the dashboard with --onchain for this attack");
+      const onchain = await vault.executeOrder(`bypass-${Date.now()}`, 10_000);
+      const ev: JournalEvent = {
+        type: "vault_direct",
+        timestamp: new Date().toISOString(),
+        label: "Agent key called execute_order directly, skipping the policy engine",
+        amountUsd: 10_000,
+        onchain: onchain.txHash ? { ...onchain, explorerUrl: vault.explorerUrl(onchain.txHash) } : onchain,
+      };
+      breaker.journal.append(ev);
+      return ev;
+    },
+  },
+};
+
+// ---------------------------------------------------------------- http
+
+const TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+};
+
+function json(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
+  let raw = "";
+  for await (const chunk of req) raw += chunk;
+  return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+}
+
+let agentRunning = false;
+
+const server = createServer(async (req, res) => {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  try {
+    if (req.method === "GET" && url.pathname === "/api/snapshot") {
+      return json(res, 200, {
+        mode: { onchain: Boolean(vault), agent: agentRunning, vaultId: vault?.vaultId ?? null },
+        policy: breaker.policy,
+        account: await account(),
+        vault: await vaultConfig(),
+        events: recent.slice(-200),
+        redTeam: Object.fromEntries(Object.entries(RED_TEAM).map(([k, v]) => [k, v.label])),
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/events") {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+      res.write(": connected\n\n");
+      clients.add(res);
+      req.on("close", () => clients.delete(res));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/vault") {
+      return json(res, 200, await vaultConfig());
+    }
+    if (req.method === "POST" && url.pathname === "/api/kill-switch") {
+      const b = await body(req);
+      await breaker.setKillSwitch(Boolean(b.on), "dashboard", String(b.reason ?? (b.on ? "Manual stop" : "Manual release")));
+      vaultCache.at = 0;
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "POST" && url.pathname === "/api/propose") {
+      const b = await body(req);
+      const ev = await breaker.submit({
+        agentId: String(b.agentId ?? "dashboard"),
+        side: (b.side === "sell" ? "sell" : "buy") as Side,
+        asset: String(b.asset ?? "wNEAR"),
+        notionalUsd: Number(b.notionalUsd ?? 100),
+        leverage: Number(b.leverage ?? 1),
+      });
+      return json(res, 200, ev);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/red-team/")) {
+      const attack = RED_TEAM[url.pathname.slice("/api/red-team/".length)];
+      if (!attack) return json(res, 404, { error: "unknown attack" });
+      const out = await attack.run();
+      vaultCache.at = 0;
+      return json(res, 200, out ?? { ok: true });
+    }
+    if (req.method === "POST" && url.pathname === "/api/reset") {
+      broker.state = PaperBroker.fresh(START_CASH, Date.now()).state;
+      writeFileSync(JOURNAL_FILE, "");
+      recent.length = 0;
+      breaker.persist();
+      broadcast("reset", { account: await account() });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "GET") {
+      const rel = url.pathname === "/" ? "index.html" : normalize(url.pathname).replace(/^[/\\]+/, "");
+      const file = join(PUBLIC, rel);
+      if (file.startsWith(PUBLIC) && existsSync(file)) {
+        res.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream" });
+        createReadStream(file).pipe(res);
+        return;
+      }
+    }
+    json(res, 404, { error: "not found" });
+  } catch (err) {
+    json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Prices move even when nothing is traded: refresh the gauges every 10 s.
+setInterval(() => {
+  if (clients.size > 0) void account().then((acc) => broadcast("account", acc)).catch(() => undefined);
+}, 10_000);
+
+server.listen(port, () => {
+  console.log(`Circuit Breaker dashboard: http://localhost:${port}  (vault: ${vault ? vault.vaultId : "off"}, agent: ${flag("agent") ? "on" : "off"})`);
+});
+
+if (flag("agent")) {
+  agentRunning = true;
+  void runAgent({
+    agentId: "momentum-1",
+    asset: "wNEAR",
+    strategy: momentum({ lookback: 3, thresholdBps: 5, stepPct: 5 }),
+    breaker,
+    broker,
+    ticks: Number.POSITIVE_INFINITY,
+    intervalMs: 10_000,
+  }).finally(() => (agentRunning = false));
+}

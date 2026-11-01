@@ -45,6 +45,19 @@ export class CircuitBreaker {
     return this.deps.policy;
   }
 
+  get journal(): Journal {
+    return this.deps.journal;
+  }
+
+  journalTail(n: number): JournalEvent[] {
+    return this.deps.journal.read().slice(-n);
+  }
+
+  /** Re-emits the current state, e.g. after the caller reset the paper account. */
+  persist(): void {
+    this.deps.onStateChange?.(this.deps.broker.state);
+  }
+
   /** Orders are processed one at a time so each evaluation sees the result of the previous one. */
   submit(intent: OrderIntent): Promise<DecisionEvent> {
     const run = this.queue.then(() => this.process(intent));

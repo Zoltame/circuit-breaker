@@ -15,12 +15,30 @@ export interface OnchainResult {
   amountYocto?: string;
 }
 
+/** `get_config` view of the vault contract (amounts in yoctoNEAR / token base units, as strings). */
+export interface VaultConfig {
+  owner_id: string;
+  agent_id: string;
+  kill_switch: boolean;
+  venues: string[];
+  tokens: Array<{
+    token: string;
+    limits: { max_per_order: string; max_per_day: string };
+    spent_today: string;
+    remaining_today: string;
+  }>;
+  orders_executed: number;
+}
+
 export interface VaultGateway {
   /** Sends the order's on-chain settlement leg to the whitelisted venue. */
   executeOrder(orderId: string, amountUsd: number): Promise<OnchainResult>;
   /** Freezes the vault. Only the owner can release it. */
   tripKillSwitch(reason: string): Promise<OnchainResult>;
   explorerUrl(txHash: string): string;
+  /** Reads the vault's live configuration (read-only, no key needed). */
+  getConfig?(): Promise<VaultConfig>;
+  readonly vaultId?: string;
 }
 
 export interface NearVaultOptions {
@@ -37,9 +55,19 @@ export interface NearVaultOptions {
 
 export class NearVaultGateway implements VaultGateway {
   private readonly agent: Account;
+  private readonly provider: JsonRpcProvider;
 
   constructor(private readonly o: NearVaultOptions) {
-    this.agent = new Account(o.agentId, new JsonRpcProvider({ url: o.rpcUrl }), o.privateKey);
+    this.provider = new JsonRpcProvider({ url: o.rpcUrl });
+    this.agent = new Account(o.agentId, this.provider, o.privateKey);
+  }
+
+  get vaultId(): string {
+    return this.o.vaultId;
+  }
+
+  async getConfig(): Promise<VaultConfig> {
+    return (await this.provider.callFunction({ contractId: this.o.vaultId, method: "get_config", args: {} })) as VaultConfig;
   }
 
   explorerUrl(txHash: string): string {

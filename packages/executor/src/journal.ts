@@ -19,7 +19,9 @@ export interface Execution {
 
 export type JournalEvent =
   | ({ type: "decision"; execution?: Execution; equityUsd: number } & Decision)
-  | { type: "kill_switch"; timestamp: string; on: boolean; by: string; reason: string; onchain?: OnchainLink };
+  | { type: "kill_switch"; timestamp: string; on: boolean; by: string; reason: string; onchain?: OnchainLink }
+  /** The agent's key called the vault directly, skipping the policy engine (red-team demo). */
+  | { type: "vault_direct"; timestamp: string; label: string; amountUsd: number; onchain: OnchainLink };
 
 export interface Journal {
   append(event: JournalEvent): void;

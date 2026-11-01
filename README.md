@@ -3,9 +3,8 @@
 **Portfolio-level risk limits for autonomous AI trading agents on NEAR.**
 Built at NEAR HACKATHON (Nov 1–14, 2026). Tracks: `security`, `agents`, `defi`.
 
-> Status: day 1 of 14 — policy engine, executor, agent and on-chain vault work.
+> Status: day 1 of 14 — policy engine, executor, agent, on-chain vault and live dashboard work.
 > Live testnet vault: [`guardrail-vault-sqjpi.testnet`](https://testnet.nearblocks.io/address/guardrail-vault-sqjpi.testnet).
-> Sections marked _(planned)_ are not built yet.
 
 ## The problem
 
@@ -27,9 +26,10 @@ A trading desk would never run a trader with flow caps only.
    no funds moved) and executed.
 4. Funds sit in an **on-chain vault contract** (NEAR testnet). The agent only holds a
    **function-call access key** scoped to that vault, so on-chain caps still hold if the
-   off-chain engine is bypassed or compromised. The vault contract is deployed on testnet;
-   wiring the paper executor to it is _(planned)_.
-5. Every decision is logged and shown on a **live dashboard** with a kill-switch button. _(planned)_
+   off-chain engine is bypassed or compromised. With `--onchain`, every allowed buy must also
+   settle through the vault on NEAR testnet before it is filled.
+5. Every decision is logged and shown on a **live dashboard** with a kill-switch button.
+   Tripping it also freezes the vault on-chain; only the vault owner can unfreeze it.
 
 ## How NEAR is used
 
@@ -59,6 +59,27 @@ pnpm agent 30 10                  # momentum agent, 30 ticks every 10 s, live pr
   (starts at 10,000 USDC). Delete `data/` to reset.
 - Blocked orders never reach the quote service or the broker.
 - Policy: [`policies/default.yaml`](policies/default.yaml), validated against [`policies/schema.json`](policies/schema.json).
+
+### Live dashboard
+
+```bash
+pnpm dashboard                     # http://localhost:8787, paper only, no key needed
+pnpm dashboard --onchain --agent   # buys settle through the testnet vault; momentum agent runs every 10 s
+```
+
+- **Red team** panel: each button attacks the system and the result appears in the decision feed.
+  - *Oversized order* → `BLOCK max_order_size`
+  - *Token outside the whitelist* → `BLOCK asset_whitelist`
+  - *5x leverage* → `BLOCK max_leverage`
+  - *Runaway loop (15 orders)* → 10 filled, then `BLOCK order_frequency` (limit 12/hour)
+  - *Skip the engine* (needs `--onchain`) → the agent's key calls the vault directly for $10,000 →
+    `VAULT BLOCK CB_BLOCKED:max_per_order`, with a link to the failed transaction on testnet
+- **Trip kill-switch** → status turns red, every order is blocked with `kill_switch`, and the vault is
+  frozen on-chain. **Release (off-chain)** re-opens the engine, but buys still fail with
+  `CB_BLOCKED:kill_switch` until the vault owner releases it with their own key (the dashboard shows the
+  exact `near` command).
+- Gauges: equity and PnL, drawdown from peak, daily loss, orders in the last hour, exposure per asset,
+  each against its policy limit. The vault card reads `get_config` from the contract.
 
 ### On-chain proof: a compromised agent cannot exceed the vault's limits
 
@@ -94,7 +115,7 @@ packages/
   policy-engine/     pure, deterministic evaluation of the 10 rules + tests
   agent/             momentum agent; can only propose intents
   executor/          CircuitBreaker gate, 1Click dry quotes, paper broker, JSONL journal
-  dashboard/         live UI                                       (planned)
+  dashboard/         server (SSE, kill-switch, red team) + static UI
 contracts/vault/     on-chain vault (Rust, near-sdk) + tests
 scripts/             propose, agent, vault deploy/attack, 1Click spike
 docs/                notes and architecture

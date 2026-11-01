@@ -3,7 +3,7 @@
 // Writes data/decisions.jsonl (journal) and data/state.json (paper account).
 
 import { momentum, runAgent } from "@circuit-breaker/agent";
-import { POLICY_FILE, buildBreaker } from "./lib/breaker.ts";
+import { POLICY_FILE, buildBreaker } from "@circuit-breaker/executor";
 
 const onchain = process.argv.includes("--onchain");
 const [ticksArg, intervalArg] = process.argv.slice(2).filter((a) => !a.startsWith("--"));

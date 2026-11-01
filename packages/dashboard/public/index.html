@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Circuit Breaker</title>
+  <meta name="description" content="Live risk dashboard for an autonomous AI trading agent on NEAR." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f1115'/%3E%3Cpath d='M18 4 8 18h7l-2 10 11-15h-7z' fill='%23f5b301'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" class="brand-bg"/><path d="M18 4 8 18h7l-2 10 11-15h-7z" class="brand-bolt"/></svg>
+      <div>
+        <h1>Circuit Breaker</h1>
+        <p class="sub">Risk limits for an autonomous trading agent on NEAR</p>
+      </div>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="status">
+      <span class="pill" id="status-pill">…</span>
+      <button class="btn-kill" id="kill-btn" type="button">Trip kill-switch</button>
+    </div>
+  </header>
+
+  <div class="banner" id="vault-banner" hidden></div>
+
+  <main>
+    <section class="gauges" aria-label="Account risk">
+      <article class="card gauge" id="g-equity">
+        <h2>Equity</h2>
+        <div class="big" id="equity">—</div>
+        <div class="muted" id="pnl">—</div>
+        <svg class="spark" id="spark" viewBox="0 0 200 40" preserveAspectRatio="none" aria-hidden="true"></svg>
+      </article>
+      <article class="card gauge" id="g-dd"><h2>Drawdown from peak</h2><div class="big" id="dd">—</div><div class="bar"><span></span><i></i></div><div class="muted lim"></div></article>
+      <article class="card gauge" id="g-daily"><h2>Daily loss</h2><div class="big" id="daily">—</div><div class="bar"><span></span><i></i></div><div class="muted lim"></div></article>
+      <article class="card gauge" id="g-freq"><h2>Orders, last hour</h2><div class="big" id="freq">—</div><div class="bar"><span></span><i></i></div><div class="muted lim"></div></article>
+      <article class="card gauge" id="g-exp"><h2>Exposure per asset</h2><div id="exposure" class="exp-list"></div><div class="muted lim"></div></article>
+    </section>
+
+    <div class="cols">
+      <section class="card feed" aria-label="Decisions">
+        <div class="card-head">
+          <h2>Decisions</h2>
+          <div class="counts" id="counts"></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Agent</th><th>Order</th><th>Verdict</th><th>Rule · reason</th><th>Quote cost</th><th>On-chain</th></tr></thead>
+            <tbody id="feed"></tbody>
+          </table>
+          <p class="empty" id="feed-empty">No decision yet. Run the agent or use the red-team buttons.</p>
+        </div>
+      </section>
+
+      <aside class="side">
+        <section class="card" aria-label="On-chain vault">
+          <div class="card-head"><h2>On-chain vault</h2><a id="vault-link" target="_blank" rel="noopener"></a></div>
+          <div id="vault"></div>
+        </section>
+
+        <section class="card" aria-label="Red team">
+          <div class="card-head"><h2>Red team</h2><span class="muted">try to break it</span></div>
+          <div class="redteam" id="redteam"></div>
+          <button class="btn-ghost" id="reset-btn" type="button">Reset paper account</button>
+        </section>
+
+        <section class="card" aria-label="Policy">
+          <div class="card-head"><h2>Policy</h2><span class="muted">policies/default.yaml</span></div>
+          <ol class="rules" id="rules"></ol>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <footer>
+    Paper trading on real NEAR Intents 1Click quotes (<code>dry: true</code>). Vault on NEAR testnet.
+    Built at NEAR HACKATHON.
+  </footer>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

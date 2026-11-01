@@ -1,14 +1,11 @@
-// Builds the CircuitBreaker from .env, shared by the CLI scripts and the dashboard server.
+// Builds the CircuitBreaker from environment variables, shared by the CLI scripts and the dashboard server.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import {
-  CircuitBreaker,
-  JsonlJournal,
-  NearVaultGateway,
-  OneClickClient,
-  PaperBroker,
-  type PaperState,
-} from "@circuit-breaker/executor";
+import { CircuitBreaker } from "./circuit-breaker.ts";
+import { JsonlJournal, type Journal } from "./journal.ts";
+import { OneClickClient } from "./oneclick.ts";
+import { PaperBroker, type PaperState } from "./paper.ts";
+import { NearVaultGateway } from "./vault.ts";
 import { loadPolicyYaml } from "@circuit-breaker/policy-engine";
 import type { KeyPairString } from "near-api-js";
 
@@ -20,17 +17,19 @@ export const POLICY_FILE = process.env.POLICY_FILE ?? "policies/default.yaml";
 export interface Built {
   breaker: CircuitBreaker;
   broker: PaperBroker;
-  journal: JsonlJournal;
-  onchain: boolean;
+  journal: Journal;
+  vault: NearVaultGateway | undefined;
 }
 
 /** `onchain`: buys must also settle through the testnet vault with the agent's function-call key. */
-export function buildBreaker(opts: { onchain?: boolean } = {}): Built {
+/** `wrapJournal` lets the dashboard tee journal events to live clients. */
+export function buildBreaker(opts: { onchain?: boolean; wrapJournal?: (j: Journal) => Journal } = {}): Built {
   mkdirSync(DATA_DIR, { recursive: true });
   const broker = existsSync(STATE_FILE)
     ? new PaperBroker(JSON.parse(readFileSync(STATE_FILE, "utf8")) as PaperState)
     : PaperBroker.fresh(10_000, Date.now());
-  const journal = new JsonlJournal(JOURNAL_FILE);
+  const file = new JsonlJournal(JOURNAL_FILE);
+  const journal = opts.wrapJournal ? opts.wrapJournal(file) : file;
 
   let vault: NearVaultGateway | undefined;
   if (opts.onchain) {
@@ -56,5 +55,5 @@ export function buildBreaker(opts: { onchain?: boolean } = {}): Built {
     vault,
     onStateChange: (s) => writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)),
   });
-  return { breaker, broker, journal, onchain: Boolean(vault) };
+  return { breaker, broker, journal, vault };
 }
