@@ -212,6 +212,9 @@ importers:
       '@circuit-breaker/policy-engine':
         specifier: workspace:*
         version: link:../policy-engine
+      near-api-js:
+        specifier: 7.4.0
+        version: 7.4.0
     devDependencies:
       '@types/node':
         specifier: ^24.19.2

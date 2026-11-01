@@ -146,11 +146,11 @@ describe("CircuitBreaker", () => {
 
   it("honours a manual kill-switch and its release", async () => {
     const { cb, journal } = setup();
-    cb.setKillSwitch(true, "operator", "manual stop");
+    await cb.setKillSwitch(true, "operator", "manual stop");
     expect((await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 10 })).triggeredRule).toBe(
       "kill_switch",
     );
-    cb.setKillSwitch(false, "operator", "resume");
+    await cb.setKillSwitch(false, "operator", "resume");
     expect((await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 10 })).verdict).toBe("allow");
     expect(journal.events.filter((e) => e.type === "kill_switch")).toHaveLength(2);
   });

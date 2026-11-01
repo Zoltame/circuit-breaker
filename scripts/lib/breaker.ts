@@ -1,0 +1,60 @@
+// Builds the CircuitBreaker from .env, shared by the CLI scripts and the dashboard server.
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  CircuitBreaker,
+  JsonlJournal,
+  NearVaultGateway,
+  OneClickClient,
+  PaperBroker,
+  type PaperState,
+} from "@circuit-breaker/executor";
+import { loadPolicyYaml } from "@circuit-breaker/policy-engine";
+import type { KeyPairString } from "near-api-js";
+
+export const DATA_DIR = process.env.CB_DATA_DIR ?? "data";
+export const STATE_FILE = `${DATA_DIR}/state.json`;
+export const JOURNAL_FILE = `${DATA_DIR}/decisions.jsonl`;
+export const POLICY_FILE = process.env.POLICY_FILE ?? "policies/default.yaml";
+
+export interface Built {
+  breaker: CircuitBreaker;
+  broker: PaperBroker;
+  journal: JsonlJournal;
+  onchain: boolean;
+}
+
+/** `onchain`: buys must also settle through the testnet vault with the agent's function-call key. */
+export function buildBreaker(opts: { onchain?: boolean } = {}): Built {
+  mkdirSync(DATA_DIR, { recursive: true });
+  const broker = existsSync(STATE_FILE)
+    ? new PaperBroker(JSON.parse(readFileSync(STATE_FILE, "utf8")) as PaperState)
+    : PaperBroker.fresh(10_000, Date.now());
+  const journal = new JsonlJournal(JOURNAL_FILE);
+
+  let vault: NearVaultGateway | undefined;
+  if (opts.onchain) {
+    const { VAULT_ACCOUNT_ID, AGENT_ACCOUNT_ID, AGENT_PRIVATE_KEY, VENUE_ACCOUNT_ID } = process.env;
+    if (!VAULT_ACCOUNT_ID || !AGENT_ACCOUNT_ID || !AGENT_PRIVATE_KEY || !VENUE_ACCOUNT_ID) {
+      throw new Error("--onchain needs VAULT_ACCOUNT_ID, AGENT_ACCOUNT_ID, AGENT_PRIVATE_KEY, VENUE_ACCOUNT_ID in .env");
+    }
+    vault = new NearVaultGateway({
+      rpcUrl: process.env.NEAR_RPC_URL ?? "https://test.rpc.fastnear.com",
+      vaultId: VAULT_ACCOUNT_ID,
+      agentId: AGENT_ACCOUNT_ID,
+      privateKey: AGENT_PRIVATE_KEY as KeyPairString,
+      venueId: VENUE_ACCOUNT_ID,
+      ...(process.env.VAULT_NEAR_PER_USD ? { nearPerUsd: Number(process.env.VAULT_NEAR_PER_USD) } : {}),
+    });
+  }
+
+  const breaker = new CircuitBreaker({
+    policy: loadPolicyYaml(readFileSync(POLICY_FILE, "utf8")),
+    broker,
+    quoter: new OneClickClient({ baseUrl: process.env.ONECLICK_BASE_URL, jwt: process.env.ONECLICK_JWT, tokenCacheMs: 5_000 }),
+    journal,
+    vault,
+    onStateChange: (s) => writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)),
+  });
+  return { breaker, broker, journal, onchain: Boolean(vault) };
+}

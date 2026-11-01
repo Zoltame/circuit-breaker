@@ -1,10 +1,12 @@
 // The gate between an agent and its money. Every order goes: intent -> policy engine -> (quote) ->
-// policy engine with quote -> paper fill -> journal. Nothing reaches the broker without an "allow".
+// policy engine with quote -> on-chain vault (optional) -> paper fill -> journal.
+// Nothing reaches the vault or the broker without an "allow".
 
 import { evaluateOrder, type Decision, type Order, type Policy, type Side } from "@circuit-breaker/policy-engine";
-import type { Execution, Journal, JournalEvent } from "./journal.ts";
+import type { Execution, Journal, JournalEvent, OnchainLink } from "./journal.ts";
 import { findNearToken, fromBaseUnits, toBaseUnits, type Quoter, type TokenInfo } from "./oneclick.ts";
 import { QUOTE_ASSET, type PaperBroker, type PaperState } from "./paper.ts";
+import type { OnchainResult, VaultGateway } from "./vault.ts";
 
 export interface OrderIntent {
   agentId: string;
@@ -25,6 +27,8 @@ export interface CircuitBreakerDeps {
   newId?: () => string;
   /** Called after every state change (fill, kill-switch) so the caller can persist it. */
   onStateChange?: (state: PaperState) => void;
+  /** Optional on-chain vault. When set, buys must settle on-chain before the paper fill. */
+  vault?: VaultGateway | undefined;
 }
 
 export class CircuitBreaker {
@@ -48,10 +52,26 @@ export class CircuitBreaker {
     return run;
   }
 
-  setKillSwitch(on: boolean, by: string, reason: string): void {
-    this.deps.broker.setKillSwitch(on);
-    this.deps.journal.append({ type: "kill_switch", timestamp: new Date(this.now()).toISOString(), on, by, reason });
-    this.deps.onStateChange?.(this.deps.broker.state);
+  /**
+   * Manual kill-switch. Turning it on also freezes the on-chain vault; turning it off only releases
+   * the off-chain gate: the vault stays frozen until its owner releases it with their own key.
+   */
+  setKillSwitch(on: boolean, by: string, reason: string): Promise<void> {
+    const run = this.queue.then(async () => {
+      this.deps.broker.setKillSwitch(on);
+      const onchain = on ? await this.deps.vault?.tripKillSwitch(reason) : undefined;
+      this.deps.journal.append({
+        type: "kill_switch",
+        timestamp: new Date(this.now()).toISOString(),
+        on,
+        by,
+        reason,
+        ...(onchain ? { onchain: this.withLink(onchain) } : {}),
+      });
+      this.deps.onStateChange?.(this.deps.broker.state);
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   /** Current prices (USD) for every asset the account holds or may trade. */
@@ -101,23 +121,19 @@ export class CircuitBreaker {
 
     let execution: Execution | undefined;
     if (decision.verdict === "allow" && fill) {
-      try {
-        if (order.leverage > 1) throw new Error("Paper broker is spot-only");
-        broker.apply({ side: order.side, asset: order.asset, ...fill }, now);
-        execution = { status: "filled", ...fill };
-      } catch (err) {
-        execution = { status: "failed", error: err instanceof Error ? err.message : String(err) };
-      }
+      execution = await this.execute(order, fill, now);
     }
 
     if (decision.effects.activateKillSwitch && !broker.state.killSwitch) {
       broker.setKillSwitch(true);
+      const onchain = await this.deps.vault?.tripKillSwitch(decision.reason);
       journal.append({
         type: "kill_switch",
         timestamp: decision.timestamp,
         on: true,
         by: `policy:${decision.triggeredRule}`,
         reason: decision.reason,
+        ...(onchain ? { onchain: this.withLink(onchain) } : {}),
       });
     }
 
@@ -130,6 +146,28 @@ export class CircuitBreaker {
     journal.append(event);
     this.deps.onStateChange?.(broker.state);
     return event;
+  }
+
+  /** Buys first go through the on-chain vault (if configured); the paper fill only happens if it settles. */
+  private async execute(order: Order, fill: { units: number; cashDelta: number }, now: number): Promise<Execution> {
+    try {
+      if (order.leverage > 1) throw new Error("Paper broker is spot-only");
+      let onchain: OnchainLink | undefined;
+      if (this.deps.vault && order.side === "buy") {
+        onchain = this.withLink(await this.deps.vault.executeOrder(order.id, order.notionalUsd));
+        if (onchain.status !== "settled") {
+          return { status: "failed", error: `vault ${onchain.status}: ${onchain.error ?? "unknown"}`, onchain };
+        }
+      }
+      this.deps.broker.apply({ side: order.side, asset: order.asset, ...fill }, now);
+      return { status: "filled", ...fill, ...(onchain ? { onchain } : {}) };
+    } catch (err) {
+      return { status: "failed", error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  private withLink(r: OnchainResult): OnchainLink {
+    return r.txHash && this.deps.vault ? { ...r, explorerUrl: this.deps.vault.explorerUrl(r.txHash) } : r;
   }
 
   private async quote(

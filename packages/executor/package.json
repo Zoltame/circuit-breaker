@@ -11,7 +11,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@circuit-breaker/policy-engine": "workspace:*"
+    "@circuit-breaker/policy-engine": "workspace:*",
+    "near-api-js": "7.4.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

@@ -3,6 +3,9 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Decision } from "@circuit-breaker/policy-engine";
+import type { OnchainResult } from "./vault.ts";
+
+export type OnchainLink = OnchainResult & { explorerUrl?: string };
 
 export interface Execution {
   status: "filled" | "failed";
@@ -10,11 +13,13 @@ export interface Execution {
   units?: number;
   cashDelta?: number;
   error?: string;
+  /** On-chain vault leg, when a vault is configured. */
+  onchain?: OnchainLink;
 }
 
 export type JournalEvent =
   | ({ type: "decision"; execution?: Execution; equityUsd: number } & Decision)
-  | { type: "kill_switch"; timestamp: string; on: boolean; by: string; reason: string };
+  | { type: "kill_switch"; timestamp: string; on: boolean; by: string; reason: string; onchain?: OnchainLink };
 
 export interface Journal {
   append(event: JournalEvent): void;

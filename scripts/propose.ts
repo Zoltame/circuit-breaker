@@ -1,31 +1,18 @@
 // Proposes one order through the Circuit Breaker, as an agent would.
-// Usage: pnpm propose <buy|sell> <asset> <notionalUsd> [leverage]
-// Example: pnpm propose buy wNEAR 500
+// Usage: pnpm propose <buy|sell> <asset> <notionalUsd> [leverage] [--onchain]
+// Example: pnpm propose buy wNEAR 500 --onchain
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { CircuitBreaker, JsonlJournal, OneClickClient, PaperBroker, type PaperState } from "@circuit-breaker/executor";
-import { loadPolicyYaml, type Side } from "@circuit-breaker/policy-engine";
+import type { Side } from "@circuit-breaker/policy-engine";
+import { buildBreaker } from "./lib/breaker.ts";
 
-const [side, asset, notional, leverage] = process.argv.slice(2);
+const onchain = process.argv.includes("--onchain");
+const [side, asset, notional, leverage] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 if ((side !== "buy" && side !== "sell") || !asset || !notional) {
-  console.error("usage: pnpm propose <buy|sell> <asset> <notionalUsd> [leverage]");
+  console.error("usage: pnpm propose <buy|sell> <asset> <notionalUsd> [leverage] [--onchain]");
   process.exit(1);
 }
 
-const STATE = "data/state.json";
-mkdirSync("data", { recursive: true });
-const broker = existsSync(STATE)
-  ? new PaperBroker(JSON.parse(readFileSync(STATE, "utf8")) as PaperState)
-  : PaperBroker.fresh(10_000, Date.now());
-
-const breaker = new CircuitBreaker({
-  policy: loadPolicyYaml(readFileSync(process.env.POLICY_FILE ?? "policies/default.yaml", "utf8")),
-  broker,
-  quoter: new OneClickClient({ baseUrl: process.env.ONECLICK_BASE_URL, jwt: process.env.ONECLICK_JWT }),
-  journal: new JsonlJournal("data/decisions.jsonl"),
-  onStateChange: (s) => writeFileSync(STATE, JSON.stringify(s, null, 2)),
-});
-
+const { breaker } = buildBreaker({ onchain });
 const ev = await breaker.submit({
   agentId: "cli",
   side: side as Side,

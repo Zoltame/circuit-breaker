@@ -1,5 +1,6 @@
 export { CircuitBreaker, type CircuitBreakerDeps, type DecisionEvent, type OrderIntent } from "./circuit-breaker.ts";
-export { JsonlJournal, MemoryJournal, type Execution, type Journal, type JournalEvent } from "./journal.ts";
+export { JsonlJournal, MemoryJournal, type Execution, type Journal, type JournalEvent, type OnchainLink } from "./journal.ts";
+export { NearVaultGateway, type NearVaultOptions, type OnchainResult, type VaultGateway } from "./vault.ts";
 export {
   OneClickClient,
   findNearToken,
