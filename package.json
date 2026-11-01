@@ -12,7 +12,10 @@
     "spike:1click": "tsx --env-file-if-exists=.env scripts/spike-1click.ts",
     "spike:near": "tsx --env-file-if-exists=.env scripts/spike-near.ts",
     "agent": "tsx --env-file-if-exists=.env scripts/run-agent.ts",
-    "propose": "tsx --env-file-if-exists=.env scripts/propose.ts"
+    "propose": "tsx --env-file-if-exists=.env scripts/propose.ts",
+    "contract": "tsx scripts/contract.ts",
+    "vault:deploy": "tsx --env-file=.env scripts/vault-deploy.ts",
+    "vault:attack": "tsx --env-file=.env scripts/vault-attack.ts"
   },
   "devDependencies": {
     "@circuit-breaker/agent": "workspace:*",
