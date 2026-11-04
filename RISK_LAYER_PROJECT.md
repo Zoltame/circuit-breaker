@@ -1,7 +1,9 @@
 # NEAR Hackathon — Risk Layer pour agents de trading autonomes
 
 > Fichier à donner à l'agent de code (Claude Code, Codex...). Il contient le contexte, le périmètre, l'architecture, le backlog et les règles de travail.
-> **Démarrage du code : 1er nov 2026, 00:00 UTC.** Avant cette date : lecture, cadrage, setup d'environnement uniquement.
+> **Mise à jour 4 nov 2026 :** le projet s'appelle **Circuit Breaker** (repo `circuit-breaker`). Le site officiel indique désormais
+> « Code written since the announcement counts » (la règle « pas de code avant le 1er nov » ci-dessous est obsolète).
+> Le post de démo doit taguer **@NEARProtocol** et **#NEARHackathon**. Voir `README.md` pour l'état réel du code.
 
 ---
 
@@ -28,7 +30,7 @@
 
 ## 2. Concept
 
-**Nom de travail : `Guardrail`** (à renommer)
+**Nom : `Circuit Breaker`** (« Guardrail » est pris par un autre projet de la galerie)
 
 Problème : donner de l'argent à un agent IA, c'est lui donner trop de pouvoir. Personne ne gère le risque d'un agent autonome comme le ferait une salle de marché.
 
@@ -81,6 +83,11 @@ Chaque ordre proposé par l'agent est évalué par ces règles, dans cet ordre. 
 | 8 | Fréquence max d'ordres | n / heure | Anti-boucle folle |
 | 9 | Slippage max toléré | bps | Bloque si le devis dépasse |
 | 10 | Fenêtres horaires autorisées | plages UTC | Bloque en dehors |
+
+Ajouts depuis la rédaction de ce brief :
+- **Reduce-only** : en cas de kill-switch / perte journalière / drawdown, les ventes d'une position détenue restent autorisées (règles 1, 2, 3, 6, 7 levées pour elles, trace dans `waived`).
+- **Auto-flatten** : au drawdown max, toutes les positions sont vendues, même si l'agent ne propose plus rien (monitor toutes les 10 s).
+- **Mode swarm** (optionnel) : 2 règles de plus, `agent_quarantine` et `agent_budget` (budget d'exposition et drawdown propres à chaque agent).
 
 Exigences :
 - Politiques définies dans un fichier de config versionné (JSON ou YAML), validé par schéma.
@@ -190,7 +197,7 @@ Exigences :
 
 1. **Ne pas inventer d'API.** Pour NEAR Intents, function call keys, sous-comptes, NEAR AI Cloud : lire la doc officielle (docs.near.org, docs.near-intents.org, docs.near.ai) avant d'écrire du code. Si un point n'est pas vérifiable, le signaler plutôt que deviner.
 2. **Télécharger `https://nearhackathon.com/HACKATHON.md`** au démarrage et le lire : il contient les règles et les étapes de soumission à jour. En cas de conflit avec ce fichier, il fait foi.
-3. **Aucun code du projet avant le 1er nov 2026, 00:00 UTC** (règle "build during the hackathon").
+3. ~~Aucun code avant le 1er nov~~ : règle remplacée par le site (« code written since the announcement counts »).
 4. **Testnet uniquement** pendant le dev. Jamais de fonds réels sans validation explicite de l'utilisateur.
 5. **Secrets :** variables d'environnement, `.env` dans `.gitignore`, fournir un `.env.example`.
 6. **Priorité :** MVP fonctionnel > stretch. Si un composant bloque plus de 4 h, proposer une alternative plus simple plutôt que s'acharner.

@@ -16,6 +16,7 @@ target/
 
 # Runtime data
 data/
+data-*/
 *.jsonl
 *.sqlite
 *.sqlite-journal

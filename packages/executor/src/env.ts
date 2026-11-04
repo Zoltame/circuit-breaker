@@ -9,10 +9,16 @@ import { NearVaultGateway } from "./vault.ts";
 import { loadPolicyYaml } from "@circuit-breaker/policy-engine";
 import type { KeyPairString } from "near-api-js";
 
-export const DATA_DIR = process.env.CB_DATA_DIR ?? "data";
+/** `--name value` from the command line, e.g. `--policy policies/swarm.yaml`. */
+const cliArg = (name: string): string | undefined => {
+  const i = process.argv.indexOf(`--${name}`);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+};
+
+export const DATA_DIR = cliArg("data") ?? process.env.CB_DATA_DIR ?? "data";
 export const STATE_FILE = `${DATA_DIR}/state.json`;
 export const JOURNAL_FILE = `${DATA_DIR}/decisions.jsonl`;
-export const POLICY_FILE = process.env.POLICY_FILE ?? "policies/default.yaml";
+export const POLICY_FILE = cliArg("policy") ?? process.env.POLICY_FILE ?? "policies/default.yaml";
 
 export interface Built {
   breaker: CircuitBreaker;

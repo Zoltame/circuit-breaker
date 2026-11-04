@@ -6,6 +6,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["dashboard", "--onchain"],
       "port": 8787
+    },
+    {
+      "name": "dashboard-swarm",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dashboard:swarm", "--port", "8789"],
+      "port": 8789
     }
   ]
 }

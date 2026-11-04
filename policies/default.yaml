@@ -32,3 +32,11 @@ maxSlippageBps: 100
 
 # 10. Allowed trading windows, UTC. Start inclusive, end exclusive. Empty = always.
 tradingWindowsUtc: []
+
+# Reduce-only exits. Once the kill-switch, the daily loss limit or the drawdown limit is hit, orders
+# that only SELL an existing spot position are still allowed (rules 1, 3, 6 and 7 are waived for them
+# and the waiver is written to the journal). Everything that adds risk stays blocked.
+#
+# autoFlatten: when the drawdown limit trips the kill-switch, also sell every position, using those
+# reduce-only exits, without waiting for the agent to propose anything.
+autoFlatten: true

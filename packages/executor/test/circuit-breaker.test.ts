@@ -22,9 +22,12 @@ class FakeQuoter implements Quoter {
   price = 4;
   costBps = 30;
   fail = false;
+  /** Simulates the price feed being down (as opposed to the quote endpoint). */
+  tokensFail = false;
   quoteCalls = 0;
 
   async tokens(): Promise<TokenInfo[]> {
+    if (this.tokensFail) throw new Error("price feed down");
     return [
       { assetId: WNEAR, decimals: 24, blockchain: "near", symbol: "wNEAR", price: this.price },
       { assetId: USDC, decimals: 6, blockchain: "near", symbol: "USDC", price: 1 },
@@ -123,18 +126,20 @@ describe("CircuitBreaker", () => {
     expect(verdicts).toEqual(["allow", "allow", "allow", "block", "block"]);
   });
 
-  it("activates the kill-switch on drawdown and blocks everything after", async () => {
-    const { cb, quoter, journal, broker } = setup({ maxExposurePct: 100, maxOrderPct: 100 });
+  it("activates the kill-switch on drawdown and blocks new risk after", async () => {
+    // autoFlatten is off here: this test is about the gate itself. Auto-flatten has its own tests below.
+    const open = { maxExposurePct: 100, maxOrderPct: 100, autoFlatten: false };
+    const { cb, quoter, journal, broker } = setup(open);
     await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 8_000 });
     quoter.price = 2; // wNEAR halves: equity ~ 2_000 + 3_988 -> ~40% drawdown
-    const hit = await cb.submit({ agentId: "a", side: "sell", asset: "wNEAR", notionalUsd: 100 });
+    const hit = await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 100 });
     expect(hit).toMatchObject({ verdict: "block", triggeredRule: "daily_loss" }); // rule 6 comes before 7
     // Next UTC day: daily loss resets, drawdown from peak remains -> kill-switch
-    const nextDay = setup({ maxExposurePct: 100, maxOrderPct: 100 });
+    const nextDay = setup(open);
     await nextDay.cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 8_000 });
     nextDay.quoter.price = 2;
     nextDay.tick(24 * 3_600_000);
-    const dd = await nextDay.cb.submit({ agentId: "a", side: "sell", asset: "wNEAR", notionalUsd: 100 });
+    const dd = await nextDay.cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 10 });
     expect(dd).toMatchObject({ verdict: "block", triggeredRule: "max_drawdown" });
     expect(nextDay.broker.state.killSwitch).toBe(true);
     expect(nextDay.journal.events.some((e) => e.type === "kill_switch" && e.on)).toBe(true);
@@ -161,6 +166,216 @@ describe("CircuitBreaker", () => {
       Array.from({ length: 5 }, () => cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 100 })),
     );
     expect(results.map((r) => r.verdict)).toEqual(["allow", "allow", "allow", "block", "block"]);
+  });
+});
+
+const kinds = (events: { type: string }[]) => events.map((e) => e.type);
+
+describe("reduce-only exits and auto-flatten", () => {
+  const open = { maxExposurePct: 100, maxOrderPct: 100, maxOrdersPerHour: 50 };
+  const DAY = 24 * 3_600_000;
+
+  /** Buys 8,000 of wNEAR, halves the price, moves to the next UTC day: ~40% drawdown, daily loss reset. */
+  async function crashed(over: Partial<Policy> = {}) {
+    const ctx = setup({ ...open, ...over });
+    await ctx.cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 8_000 });
+    ctx.quoter.price = 2;
+    ctx.tick(DAY);
+    return ctx;
+  }
+
+  it("lets the agent sell its position while the kill-switch is on", async () => {
+    const { cb, broker } = setup({ ...open, autoFlatten: false });
+    await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 4_000 });
+    await cb.setKillSwitch(true, "operator", "stop");
+    expect((await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 10 })).triggeredRule).toBe("kill_switch");
+
+    const exit = await cb.submit({ agentId: "a", side: "sell", asset: "wNEAR", notionalUsd: 0, closePosition: true });
+    expect(exit.verdict).toBe("allow");
+    expect(exit.waived).toEqual(["kill_switch"]);
+    expect(exit.order.notionalUsd).toBeCloseTo(3_988); // 997 units at $4, taken from the same marking
+    expect(exit.execution).toMatchObject({ status: "filled" });
+    expect(broker.state.holdings.wNEAR).toBe(0); // exactly zero, no float dust
+    expect(broker.state.cashUsd).toBeCloseTo(6_000 + 3_988 * 0.997);
+    expect(broker.state.killSwitch).toBe(true); // exiting does not release anything
+  });
+
+  it("auto-flattens when the drawdown limit trips the kill-switch", async () => {
+    const { cb, broker, journal } = await crashed();
+    const dd = await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 10 });
+    expect(dd).toMatchObject({ verdict: "block", triggeredRule: "max_drawdown" });
+
+    expect(broker.state.killSwitch).toBe(true);
+    expect(broker.state.holdings.wNEAR).toBe(0);
+    expect(kinds(journal.events)).toEqual(["decision", "kill_switch", "decision", "flatten", "decision"]);
+    const exit = journal.events[4];
+    expect(exit).toMatchObject({ type: "decision", verdict: "allow", order: { side: "sell", agentId: "policy:max_drawdown" } });
+    expect((exit as { waived: string[] }).waived).toContain("max_drawdown");
+    expect(journal.events.filter((e) => e.type === "flatten")).toHaveLength(1); // no recursion
+  });
+
+  it("does not flatten when autoFlatten is off", async () => {
+    const { cb, broker, journal } = await crashed({ autoFlatten: false });
+    await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 10 });
+    expect(broker.state.killSwitch).toBe(true);
+    expect(broker.state.holdings.wNEAR).toBeGreaterThan(0);
+    expect(kinds(journal.events)).not.toContain("flatten");
+  });
+
+  it("monitor trips the kill-switch and flattens with no order proposed", async () => {
+    const { cb, broker, journal } = await crashed();
+    await cb.monitor();
+    expect(broker.state.killSwitch).toBe(true);
+    expect(broker.state.holdings.wNEAR).toBe(0);
+    expect(kinds(journal.events)).toEqual(["decision", "kill_switch", "flatten", "decision"]);
+    expect(journal.events[1]).toMatchObject({ type: "kill_switch", on: true, by: "policy:max_drawdown" });
+  });
+
+  it("monitor retries a failed flatten, but not in a tight loop", async () => {
+    const { cb, quoter, broker, journal, tick } = await crashed();
+    quoter.fail = true; // exits can't be quoted
+    await cb.monitor();
+    expect(broker.state.killSwitch).toBe(true);
+    expect(broker.state.holdings.wNEAR).toBeGreaterThan(0);
+    const flattens = () => journal.events.filter((e) => e.type === "flatten").length;
+    expect(flattens()).toBe(1);
+
+    tick(10_000);
+    await cb.monitor(); // too soon
+    expect(flattens()).toBe(1);
+
+    quoter.fail = false;
+    tick(60_000);
+    await cb.monitor();
+    expect(flattens()).toBe(2);
+    expect(broker.state.holdings.wNEAR).toBe(0);
+  });
+
+  it("monitor does nothing when the price feed is down", async () => {
+    const { cb, quoter, broker, journal } = setup(open);
+    await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 8_000 });
+    quoter.tokensFail = true; // positions would be marked at zero: a fake 80% crash
+    await cb.monitor();
+    expect(broker.state.killSwitch).toBe(false);
+    expect(journal.events).toHaveLength(1);
+  });
+
+  it("monitor leaves a healthy account alone", async () => {
+    const { cb, broker, journal } = setup(open);
+    await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 1_000 });
+    await cb.monitor();
+    expect(broker.state.killSwitch).toBe(false);
+    expect(journal.events).toHaveLength(1);
+  });
+
+  it("flatten sells every position on request without touching the kill-switch", async () => {
+    const { cb, broker, journal } = setup(open);
+    await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 2_000 });
+    const out = await cb.flatten("operator", "manual flatten");
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ verdict: "allow", execution: { status: "filled" } });
+    expect(broker.state.holdings.wNEAR).toBe(0);
+    expect(broker.state.killSwitch).toBe(false);
+    expect(kinds(journal.events)).toEqual(["decision", "flatten", "decision"]);
+    expect(await cb.flatten("operator", "again")).toEqual([]); // nothing left: no event, no order
+  });
+});
+
+describe("swarm: several agents under one risk desk", () => {
+  const swarm = {
+    agents: {
+      alpha: { budgetPct: 40, maxDrawdownPct: 10 },
+      beta: { budgetPct: 40, maxDrawdownPct: 10 },
+    },
+  };
+  const open = { maxExposurePct: 100, maxOrderPct: 100, maxOrdersPerHour: 50, swarm };
+  const buy = (agentId: string, notionalUsd: number) => ({ agentId, side: "buy" as const, asset: "wNEAR", notionalUsd });
+  const DAY = 24 * 3_600_000;
+
+  it("refuses unlisted agents and enforces each agent's own budget", async () => {
+    const { cb } = setup(open);
+    expect(await cb.submit(buy("mallory", 100))).toMatchObject({ verdict: "block", triggeredRule: "agent_budget" });
+    expect((await cb.submit(buy("alpha", 3_000))).verdict).toBe("allow"); // ~30% of the account
+    // 2,000 more would put alpha at ~50% of the account, over its 40%, although the account has room.
+    expect(await cb.submit(buy("alpha", 2_000))).toMatchObject({ verdict: "block", triggeredRule: "agent_budget" });
+    expect((await cb.submit(buy("beta", 2_000))).verdict).toBe("allow"); // beta's budget is untouched
+  });
+
+  it("keeps positions apart: an agent can only sell what it holds", async () => {
+    const { cb, broker } = setup(open);
+    await cb.submit(buy("alpha", 2_000));
+    const stolen = await cb.submit({ agentId: "beta", side: "sell", asset: "wNEAR", notionalUsd: 100 });
+    expect(stolen).toMatchObject({ verdict: "block", triggeredRule: "agent_budget" });
+    const own = await cb.submit({ agentId: "alpha", side: "sell", asset: "wNEAR", notionalUsd: 0, closePosition: true });
+    expect(own.verdict).toBe("allow");
+    expect(broker.state.agents?.alpha?.positions.wNEAR).toBeUndefined();
+  });
+
+  it("quarantines only the agent that lost too much, and unwinds just its positions", async () => {
+    const { cb, quoter, broker, journal } = setup(open);
+    await cb.submit(buy("alpha", 4_000));
+    await cb.submit(buy("beta", 1_000));
+    quoter.price = 3.2; // -20%: alpha loses ~20% of its 4,000; beta ~5% of its 4,000; the account ~10%
+
+    await cb.monitor();
+
+    expect(broker.state.agents?.alpha?.quarantined).toBe(true);
+    expect(broker.state.agents?.beta?.quarantined).toBe(false);
+    expect(broker.state.agents?.alpha?.positions.wNEAR).toBeUndefined(); // unwound
+    expect(broker.state.agents?.beta?.positions.wNEAR?.units).toBeCloseTo(249.25); // untouched
+    expect(broker.state.killSwitch).toBe(false); // the account as a whole is within its limits
+    expect(broker.state.agents?.alpha?.realizedUsd).toBeCloseTo(997 * 3.2 * 0.997 - 4_000, 0);
+
+    const kinds_ = kinds(journal.events);
+    expect(kinds_).toContain("agent_quarantine");
+    expect(journal.events.find((e) => e.type === "flatten")).toMatchObject({ positions: ["alpha/wNEAR"] });
+    const exit = journal.events.filter((e) => e.type === "decision").at(-1);
+    expect(exit).toMatchObject({ verdict: "allow", order: { agentId: "alpha", side: "sell" } });
+    expect((exit as { waived: string[] }).waived).toContain("agent_quarantine");
+  });
+
+  it("keeps the quarantined agent out while the others carry on", async () => {
+    const { cb, quoter, tick } = setup(open);
+    await cb.submit(buy("alpha", 4_000));
+    await cb.submit(buy("beta", 1_000));
+    quoter.price = 3.2;
+    await cb.monitor();
+    tick(DAY); // the account's daily loss resets; alpha's quarantine does not
+
+    expect(await cb.submit(buy("alpha", 100))).toMatchObject({ verdict: "block", triggeredRule: "agent_quarantine" });
+    expect((await cb.submit(buy("beta", 500))).verdict).toBe("allow");
+  });
+
+  it("lets the operator release a quarantined agent", async () => {
+    const { cb, quoter, tick, journal } = setup(open);
+    await cb.submit(buy("alpha", 4_000));
+    quoter.price = 3.2;
+    await cb.monitor();
+    tick(DAY);
+    await cb.releaseAgent("alpha", "operator", "reviewed");
+
+    expect(journal.events.at(-1)).toMatchObject({ type: "agent_quarantine", agentId: "alpha", on: false });
+    expect((await cb.submit(buy("alpha", 500))).verdict).toBe("allow");
+    await cb.monitor(); // its peak was reset: the release does not re-trip on the old loss
+    expect(journal.events.filter((e) => e.type === "agent_quarantine" && e.on)).toHaveLength(1);
+    await expect(cb.releaseAgent("ghost", "operator", "x")).rejects.toThrow("Unknown agent");
+  });
+
+  it("flatten sells each position through its owner", async () => {
+    const { cb, broker, journal } = setup(open);
+    await cb.submit(buy("alpha", 2_000));
+    await cb.submit(buy("beta", 1_000));
+    const out = await cb.flatten("operator", "manual");
+    expect(out.map((e) => e.order.agentId)).toEqual(["alpha", "beta"]);
+    expect(out.every((e) => e.verdict === "allow" && e.execution?.status === "filled")).toBe(true);
+    expect(journal.events.find((e) => e.type === "flatten")).toMatchObject({ positions: ["alpha/wNEAR", "beta/wNEAR"] });
+    expect(broker.state.holdings.wNEAR).toBe(0);
+  });
+
+  it("a pooled account keeps no per-agent books", async () => {
+    const { cb, broker } = setup();
+    await cb.submit(buy("anyone", 500));
+    expect(broker.state.agents).toBeUndefined();
   });
 });
 

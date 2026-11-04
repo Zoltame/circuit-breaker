@@ -26,10 +26,14 @@ export async function runAgent(o: RunOptions): Promise<DecisionEvent[]> {
   const out: DecisionEvent[] = [];
 
   for (let i = 0; i < o.ticks && !o.signal?.aborted; i++) {
+    // Risk first: a drawdown breach is handled whether or not the strategy wants to trade this tick.
+    await o.breaker.monitor();
     const { prices } = await o.breaker.prices();
     const price = prices[o.asset];
     if (price !== undefined) {
-      const units = o.broker.state.holdings[o.asset] ?? 0;
+      // In swarm mode an agent only sees (and can only sell) what its own book holds.
+      const agents = o.broker.state.agents;
+      const units = agents ? (agents[o.agentId]?.positions[o.asset]?.units ?? 0) : (o.broker.state.holdings[o.asset] ?? 0);
       const intent = o.strategy({
         now: now(),
         asset: o.asset,

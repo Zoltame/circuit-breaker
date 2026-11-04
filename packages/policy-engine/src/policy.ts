@@ -7,6 +7,13 @@ export const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 
 const pct = z.number().positive().max(100);
 
+const AgentLimits = z
+  .object({
+    budgetPct: pct.describe("Max gross exposure of this agent, % of account equity"),
+    maxDrawdownPct: pct.describe("The agent is quarantined when its own equity falls this far below its own peak, %"),
+  })
+  .strict();
+
 export const PolicySchema = z
   .object({
     version: z.literal(1),
@@ -31,6 +38,20 @@ export const PolicySchema = z
       )
       .default([])
       .describe("Rule 10: allowed UTC windows, start inclusive, end exclusive; empty = always"),
+    swarm: z
+      .object({
+        agents: z
+          .record(z.string().min(1), AgentLimits)
+          .refine((a) => Object.keys(a).length > 0, "at least one agent is required")
+          .describe("Risk budget per agent id. An agent that is not listed is refused."),
+      })
+      .strict()
+      .optional()
+      .describe("Optional multi-agent mode: each agent gets its own exposure budget and drawdown limit"),
+    autoFlatten: z
+      .boolean()
+      .default(true)
+      .describe("When the drawdown limit trips the kill-switch, also sell every position (reduce-only exits)"),
   })
   .strict();
 

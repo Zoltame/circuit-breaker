@@ -20,6 +20,10 @@ export interface Execution {
 export type JournalEvent =
   | ({ type: "decision"; execution?: Execution; equityUsd: number } & Decision)
   | { type: "kill_switch"; timestamp: string; on: boolean; by: string; reason: string; onchain?: OnchainLink }
+  /** An agent of the swarm hit its own drawdown limit (on) or was released by the operator (off). */
+  | { type: "agent_quarantine"; timestamp: string; agentId: string; on: boolean; reason: string; drawdownPct?: number }
+  /** Every held position is being sold through reduce-only exits (auto-flatten or operator request). */
+  | { type: "flatten"; timestamp: string; by: string; reason: string; positions: string[] }
   /** The agent's key called the vault directly, skipping the policy engine (red-team demo). */
   | { type: "vault_direct"; timestamp: string; label: string; amountUsd: number; onchain: OnchainLink };
 

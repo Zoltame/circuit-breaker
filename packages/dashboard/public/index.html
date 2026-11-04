@@ -20,6 +20,7 @@
     <div class="chips" id="chips"></div>
     <div class="status">
       <span class="pill" id="status-pill">…</span>
+      <button class="btn-ghost" id="flatten-btn" type="button" title="Sell every position with reduce-only exits">Flatten all</button>
       <button class="btn-kill" id="kill-btn" type="button">Trip kill-switch</button>
     </div>
   </header>
@@ -59,6 +60,11 @@
         <section class="card" aria-label="On-chain vault">
           <div class="card-head"><h2>On-chain vault</h2><a id="vault-link" target="_blank" rel="noopener"></a></div>
           <div id="vault"></div>
+        </section>
+
+        <section class="card" aria-label="Swarm" id="swarm-card" hidden>
+          <div class="card-head"><h2>Swarm</h2><span class="muted">one budget per agent</span></div>
+          <div id="swarm"></div>
         </section>
 
         <section class="card" aria-label="Red team">

@@ -56,12 +56,34 @@ function renderAccount() {
   const tripped = a.killSwitch;
   const vaultFrozen = Boolean(state.vault?.kill_switch);
   const pill = $("#status-pill");
-  pill.textContent = tripped ? "KILL-SWITCH ACTIVE" : vaultFrozen ? "VAULT FROZEN" : "ARMED";
-  pill.className = `pill ${tripped ? "tripped" : vaultFrozen ? "frozen" : "armed"}`;
+  pill.textContent = tripped ? "KILL-SWITCH · REDUCE-ONLY" : a.reduceOnly ? "DAILY LOSS · REDUCE-ONLY" : vaultFrozen ? "VAULT FROZEN" : "ARMED";
+  pill.className = `pill ${tripped || a.reduceOnly ? "tripped" : vaultFrozen ? "frozen" : "armed"}`;
   const btn = $("#kill-btn");
   btn.textContent = tripped ? "Release (off-chain)" : "Trip kill-switch";
   btn.classList.toggle("release", tripped);
   renderSpark();
+  renderSwarm();
+}
+
+function renderSwarm() {
+  const agents = state.account?.agents;
+  $("#swarm-card").hidden = !agents;
+  if (!agents) return;
+  $("#swarm").innerHTML = agents
+    .map((a) => {
+      const exp = a.budgetPct > 0 ? Math.min(100, (a.exposurePct / a.budgetPct) * 100) : 0;
+      const dd = a.maxDrawdownPct > 0 ? Math.min(100, (a.drawdownPct / a.maxDrawdownPct) * 100) : 0;
+      const hot = (r) => (r >= 100 ? "var(--block)" : r >= 60 ? "var(--warn)" : "var(--allow)");
+      const status = a.quarantined
+        ? `<span class="badge block">QUARANTINED</span> <button type="button" class="btn-ghost" data-release="${esc(a.id)}">Release</button>`
+        : `<span class="badge allow">ACTIVE</span>`;
+      return `<div class="agent-row">
+        <div class="agent-head"><b>${esc(a.id)}</b>${status}</div>
+        <div class="exp-row"><span>Budget</span><div class="bar"><span style="width:${exp}%;background:${hot(exp)}"></span><i></i></div><b>${fmtPct(a.exposurePct)} / ${a.budgetPct}%</b></div>
+        <div class="exp-row"><span>Own drawdown</span><div class="bar"><span style="width:${dd}%;background:${hot(dd)}"></span><i></i></div><b>${fmtPct(a.drawdownPct)} / ${a.maxDrawdownPct}%</b></div>
+      </div>`;
+    })
+    .join("");
 }
 
 function renderSpark() {
@@ -93,6 +115,16 @@ function row(e) {
       <td><span class="badge warn">${e.on ? "TRIP" : "RELEASE"}</span></td>
       <td><div class="reason">${esc(e.reason)}</div></td><td></td><td>${onchainCell(e.onchain)}</td></tr>`;
   }
+  if (e.type === "agent_quarantine") {
+    return `<tr><td class="time">${t}</td><td class="agent">${esc(e.agentId)}</td><td>Agent ${e.on ? "quarantined" : "released"}</td>
+      <td><span class="badge ${e.on ? "block" : "allow"}">${e.on ? "QUARANTINE" : "RELEASE"}</span></td>
+      <td><div class="reason">${esc(e.reason)}</div></td><td></td><td></td></tr>`;
+  }
+  if (e.type === "flatten") {
+    return `<tr><td class="time">${t}</td><td class="agent">${esc(e.by)}</td><td>Flatten ${e.positions.map(esc).join(", ")}</td>
+      <td><span class="badge warn">FLATTEN</span></td>
+      <td><div class="reason">${esc(e.reason)}</div></td><td></td><td></td></tr>`;
+  }
   if (e.type === "vault_direct") {
     return `<tr><td class="time">${t}</td><td class="agent">agent key</td><td>vault.execute_order ${fmtUsd(e.amountUsd)}</td>
       <td><span class="badge ${e.onchain.status === "settled" ? "allow" : "block"}">${e.onchain.status === "settled" ? "SETTLED" : "VAULT BLOCK"}</span></td>
@@ -102,12 +134,15 @@ function row(e) {
   const lev = o.leverage > 1 ? ` ${o.leverage}x` : "";
   const cost = o.quote ? `${(((o.quote.amountInUsd - o.quote.amountOutUsd) / o.quote.amountInUsd) * 10000).toFixed(1)} bps` : "—";
   const failed = e.execution && e.execution.status === "failed";
+  const exit = e.verdict === "allow" && e.waived?.length > 0;
   const verdict = e.verdict === "allow"
-    ? failed ? `<span class="badge block">VAULT BLOCK</span>` : `<span class="badge allow">ALLOW</span>`
+    ? failed ? `<span class="badge block">VAULT BLOCK</span>` : `<span class="badge allow">${exit ? "ALLOW · EXIT" : "ALLOW"}</span>`
     : `<span class="badge block">BLOCK</span>`;
   const rule = e.verdict === "block"
     ? `<span class="rule">${esc(e.triggeredRule)}</span><div class="reason">${esc(e.reason)}</div>`
-    : failed ? `<div class="reason">${esc(e.execution.error)}</div>` : `<div class="reason">filled ${e.execution?.units?.toFixed(3) ?? ""} ${esc(o.asset)}</div>`;
+    : failed ? `<div class="reason">${esc(e.execution.error)}</div>`
+    : exit ? `<span class="rule">reduce-only</span><div class="reason">waived: ${e.waived.map(esc).join(", ")} · sold ${e.execution?.units?.toFixed(3) ?? ""} ${esc(o.asset)}</div>`
+    : `<div class="reason">filled ${e.execution?.units?.toFixed(3) ?? ""} ${esc(o.asset)}</div>`;
   return `<tr><td class="time">${t}</td><td class="agent">${esc(o.agentId)}</td><td>${o.side} ${fmtUsd(o.notionalUsd)} ${esc(o.asset)}${lev}</td>
     <td>${verdict}</td><td>${rule}</td><td class="num">${cost}</td><td>${onchainCell(e.execution?.onchain)}</td></tr>`;
 }
@@ -177,12 +212,14 @@ function renderPolicy() {
     ["Orders per hour", p.maxOrdersPerHour],
     ["Max quote cost", `${p.maxSlippageBps} bps`],
     ["Trading hours (UTC)", windows],
+    ["Auto-flatten on drawdown", p.autoFlatten ? "on" : "off"],
+    ...(p.swarm ? [["Swarm agents", Object.entries(p.swarm.agents).map(([id, l]) => `${id} ${l.budgetPct}%/${l.maxDrawdownPct}%dd`).join(", ")]] : []),
   ];
   $("#rules").innerHTML = rules.map(([k, v]) => `<li>${k}<span class="v">${esc(v)}</span></li>`).join("");
 }
 
 function renderRedTeam() {
-  const tags = { oversize: "max_order_size", unlisted: "asset_whitelist", leverage: "max_leverage", loop: "order_frequency", bypass: "vault" };
+  const tags = { oversize: "max_order_size", unlisted: "asset_whitelist", leverage: "max_leverage", loop: "order_frequency", rogue: "agent_budget", overbudget: "agent_budget", bypass: "vault" };
   $("#redteam").innerHTML = Object.entries(state.snapshot.redTeam)
     .map(([k, label]) => `<button type="button" data-attack="${k}" ${k === "bypass" && !state.snapshot.mode.onchain ? "disabled title='needs --onchain'" : ""}>${esc(label)}<span class="tag">${tags[k] ?? ""}</span></button>`)
     .join("");
@@ -244,6 +281,28 @@ $("#kill-btn").addEventListener("click", async (ev) => {
   try {
     await post("/api/kill-switch", { on: !state.account?.killSwitch });
     await refreshVault();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#swarm").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-release]");
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    await post("/api/release-agent", { agentId: btn.dataset.release });
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#flatten-btn").addEventListener("click", async (ev) => {
+  const btn = ev.currentTarget;
+  if (!confirm("Sell every position with reduce-only exits?")) return;
+  btn.disabled = true;
+  try {
+    await post("/api/flatten");
   } finally {
     btn.disabled = false;
   }

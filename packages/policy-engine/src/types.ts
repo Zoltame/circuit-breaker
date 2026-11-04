@@ -35,6 +35,23 @@ export interface AccountState {
   recentOrderTimes: number[];
   /** Persistent kill-switch, e.g. set after a drawdown breach or by the operator. */
   killSwitch: boolean;
+  /**
+   * Per-agent view. Present only in swarm mode (policy.swarm set): then every position belongs to exactly
+   * one agent, and an agent can only sell what it holds itself. Absent = one pooled account.
+   */
+  agents?: Record<string, AgentState>;
+}
+
+export interface AgentState {
+  /** Gross USD value of the agent's open positions. */
+  exposureUsd: number;
+  /** The agent's own equity: its allocation plus its realised and unrealised PnL. */
+  equityUsd: number;
+  /** Highest value of `equityUsd` seen (for the agent's own drawdown). */
+  peakEquityUsd: number;
+  /** Set once the agent hit its drawdown limit: it can only exit until an operator releases it. */
+  quarantined: boolean;
+  positionsUsd: Record<string, number>;
 }
 
 export type RuleId =
@@ -45,6 +62,8 @@ export type RuleId =
   | "max_leverage"
   | "daily_loss"
   | "max_drawdown"
+  | "agent_quarantine"
+  | "agent_budget"
   | "order_frequency"
   | "max_slippage"
   | "trading_hours";
@@ -65,6 +84,32 @@ export interface Decision {
   observed: number | string | boolean | null;
   /** Limit of the triggering rule. */
   limit: number | string | boolean | null;
+  /**
+   * Rules that were in breach but waived because the order only reduces risk (reduce-only mode).
+   * Empty for ordinary decisions. Recorded so the audit trail shows exactly what was bypassed and why.
+   */
+  waived: RuleId[];
   /** Side effects the caller must apply. The engine itself never mutates anything. */
   effects: { activateKillSwitch: boolean };
+}
+
+/** One agent's own drawdown against its own limit (swarm mode). */
+export interface AgentAssessment {
+  agentId: string;
+  drawdownPct: number;
+  limitPct: number;
+  breached: boolean;
+  quarantined: boolean;
+}
+
+/** Account-level risk figures, computed without any order. Shared by the rules and by the monitor. */
+export interface RiskAssessment {
+  /** Drop from the highest equity seen, %. */
+  drawdownPct: number;
+  /** Loss since the UTC day start, % (negative when up). */
+  dailyLossPct: number;
+  /** Drawdown limit reached: the kill-switch must be on and positions should be unwound. */
+  drawdownBreached: boolean;
+  /** Daily loss limit reached: new risk is blocked until the UTC day resets. */
+  dailyLossBreached: boolean;
 }

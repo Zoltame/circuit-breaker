@@ -7,7 +7,7 @@ import { createReadStream, existsSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { momentum, runAgent } from "@circuit-breaker/agent";
+import { meanReversion, momentum, runAgent } from "@circuit-breaker/agent";
 import {
   JOURNAL_FILE,
   PaperBroker,
@@ -52,9 +52,20 @@ recent.push(...breaker.journalTail(200));
 
 async function account() {
   const { prices } = await breaker.prices();
-  const s = broker.mark(prices, Date.now());
   const p = breaker.policy;
+  const s = broker.mark(prices, Date.now(), p.swarm);
   const pct = (a: number, b: number) => (b > 0 ? (a / b) * 100 : 0);
+  const agents = s.agents
+    ? Object.entries(s.agents).map(([id, a]) => ({
+        id,
+        exposurePct: pct(a.exposureUsd, s.equityUsd),
+        budgetPct: p.swarm?.agents[id]?.budgetPct ?? 0,
+        equityUsd: a.equityUsd,
+        drawdownPct: Math.max(0, pct(a.peakEquityUsd - a.equityUsd, a.peakEquityUsd)),
+        maxDrawdownPct: p.swarm?.agents[id]?.maxDrawdownPct ?? 0,
+        quarantined: a.quarantined,
+      }))
+    : null;
   return {
     equityUsd: s.equityUsd,
     startUsd: START_CASH,
@@ -65,8 +76,11 @@ async function account() {
     ordersLastHour: s.recentOrderTimes.length,
     exposurePct: Object.fromEntries(Object.entries(s.positionsUsd).map(([a, v]) => [a, pct(v, s.equityUsd)])),
     holdings: broker.state.holdings,
+    agents,
     prices,
     killSwitch: s.killSwitch,
+    /** Orders that only sell an existing position are still accepted while the kill-switch is on. */
+    reduceOnly: s.killSwitch || pct(s.dayStartEquityUsd - s.equityUsd, s.dayStartEquityUsd) >= p.maxDailyLossPct,
     limits: {
       maxDrawdownPct: p.maxDrawdownPct,
       maxDailyLossPct: p.maxDailyLossPct,
@@ -90,28 +104,54 @@ async function vaultConfig(): Promise<VaultConfig | null> {
 
 // ---------------------------------------------------------------- red team
 
+// In swarm mode an unlisted id is refused by agent_budget before the other rules run: attack as a listed
+// agent so each button still shows the rule it is about.
+const RED_AGENT = Object.keys(breaker.policy.swarm?.agents ?? {})[0] ?? "red-team";
+
 const RED_TEAM: Record<string, { label: string; run: () => Promise<unknown> }> = {
   oversize: {
     label: "Oversized order (25% of equity)",
     run: async () => {
       const eq = (await account()).equityUsd;
-      return breaker.submit({ agentId: "red-team", side: "buy", asset: "wNEAR", notionalUsd: Math.round(eq * 0.25) });
+      return breaker.submit({ agentId: RED_AGENT, side: "buy", asset: "wNEAR", notionalUsd: Math.round(eq * 0.25) });
     },
   },
   unlisted: {
     label: "Buy a token outside the whitelist",
-    run: () => breaker.submit({ agentId: "red-team", side: "buy", asset: "PEPE", notionalUsd: 200 }),
+    run: () => breaker.submit({ agentId: RED_AGENT, side: "buy", asset: "PEPE", notionalUsd: 200 }),
   },
   leverage: {
     label: "5x leverage",
-    run: () => breaker.submit({ agentId: "red-team", side: "buy", asset: "wNEAR", notionalUsd: 200, leverage: 5 }),
+    run: () => breaker.submit({ agentId: RED_AGENT, side: "buy", asset: "wNEAR", notionalUsd: 200, leverage: 5 }),
   },
   loop: {
     label: "Runaway loop (15 orders in a row)",
     run: async () => {
-      for (let i = 0; i < 15; i++) await breaker.submit({ agentId: "red-team", side: "buy", asset: "wNEAR", notionalUsd: 50 });
+      for (let i = 0; i < 15; i++) await breaker.submit({ agentId: RED_AGENT, side: "buy", asset: "wNEAR", notionalUsd: 50 });
     },
   },
+  ...(breaker.policy.swarm
+    ? {
+        rogue: {
+          label: "Unlisted agent tries to trade",
+          run: () => breaker.submit({ agentId: "rogue-agent", side: "buy", asset: "wNEAR", notionalUsd: 100 }),
+        },
+        overbudget: {
+          label: "A listed agent keeps buying past its own budget",
+          // Each order is small enough for the order-size rule, so only the agent's budget can stop the series.
+          run: async () => {
+            const [id] = Object.keys(breaker.policy.swarm?.agents ?? {});
+            const step = Math.floor((await account()).equityUsd * (breaker.policy.maxOrderPct / 100) * 0.9);
+            let last;
+            for (let i = 0; i < 8; i++) {
+              last = await breaker.submit({ agentId: id ?? "momentum-1", side: "buy", asset: "wNEAR", notionalUsd: step });
+              if (last.verdict === "block") break;
+            }
+            return last;
+          },
+        },
+      }
+    : {}),
   bypass: {
     label: "Skip the engine: call the vault directly for $10,000",
     run: async () => {
@@ -181,6 +221,16 @@ const server = createServer(async (req, res) => {
       vaultCache.at = 0;
       return json(res, 200, { ok: true });
     }
+    if (req.method === "POST" && url.pathname === "/api/release-agent") {
+      const b = await body(req);
+      await breaker.releaseAgent(String(b.agentId), "dashboard", "Operator released the agent");
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "POST" && url.pathname === "/api/flatten") {
+      const out = await breaker.flatten("dashboard", "Operator requested flatten");
+      vaultCache.at = 0;
+      return json(res, 200, { ok: true, orders: out.length });
+    }
     if (req.method === "POST" && url.pathname === "/api/propose") {
       const b = await body(req);
       const ev = await breaker.submit({
@@ -222,6 +272,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// The drawdown limit is enforced here too, not only when an order shows up: if the agent stops trading
+// (or is not running), a breach still trips the kill-switch and unwinds the positions.
+setInterval(() => void breaker.monitor().catch((err) => console.error("monitor:", err)), 10_000);
+
 // Prices move even when nothing is traded: refresh the gauges every 10 s.
 setInterval(() => {
   if (clients.size > 0) void account().then((acc) => broadcast("account", acc)).catch(() => undefined);
@@ -231,7 +285,15 @@ server.listen(port, () => {
   console.log(`Circuit Breaker dashboard: http://localhost:${port}  (vault: ${vault ? vault.vaultId : "off"}, agent: ${flag("agent") ? "on" : "off"})`);
 });
 
-if (flag("agent")) {
+if (flag("agent") && breaker.policy.swarm) {
+  // Swarm demo: two agents with opposite strategies share one account, each under its own budget.
+  agentRunning = true;
+  const common = { asset: "wNEAR", breaker, broker, ticks: Number.POSITIVE_INFINITY, intervalMs: 10_000 };
+  void Promise.all([
+    runAgent({ ...common, agentId: "momentum-1", strategy: momentum({ lookback: 3, thresholdBps: 5, stepPct: 5 }) }),
+    runAgent({ ...common, agentId: "meanrev-1", strategy: meanReversion({ lookback: 6, thresholdBps: 5, stepPct: 5 }) }),
+  ]).finally(() => (agentRunning = false));
+} else if (flag("agent")) {
   agentRunning = true;
   void runAgent({
     agentId: "momentum-1",

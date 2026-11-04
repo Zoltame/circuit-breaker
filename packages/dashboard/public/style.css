@@ -156,3 +156,9 @@ footer { padding: 8px 20px 24px; color: var(--muted); font-size: 12px; }
   .gauges { grid-template-columns: minmax(0, 1fr); }
   .status { width: 100%; justify-content: space-between; }
 }
+
+/* Swarm card */
+.agent-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.agent-row:last-child { border-bottom: 0; }
+.agent-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.agent-head .btn-ghost { width: auto; padding: 2px 10px; margin: 0 0 0 8px; }

@@ -98,6 +98,51 @@
         ],
         "additionalProperties": false
       }
+    },
+    "swarm": {
+      "description": "Optional multi-agent mode: each agent gets its own exposure budget and drawdown limit",
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "budgetPct": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "description": "Max gross exposure of this agent, % of account equity"
+              },
+              "maxDrawdownPct": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "description": "The agent is quarantined when its own equity falls this far below its own peak, %"
+              }
+            },
+            "required": [
+              "budgetPct",
+              "maxDrawdownPct"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Risk budget per agent id. An agent that is not listed is refused."
+        }
+      },
+      "required": [
+        "agents"
+      ],
+      "additionalProperties": false
+    },
+    "autoFlatten": {
+      "default": true,
+      "description": "When the drawdown limit trips the kill-switch, also sell every position (reduce-only exits)",
+      "type": "boolean"
     }
   },
   "required": [
