@@ -251,6 +251,29 @@ describe("reduce-only exits and auto-flatten", () => {
     expect(broker.state.holdings.wNEAR).toBe(0);
   });
 
+  it("a manual release resets the drawdown peak, so the monitor does not re-trip on the old loss", async () => {
+    const { cb, broker, journal, tick } = await crashed({ autoFlatten: false });
+    await cb.monitor();
+    expect(broker.state.killSwitch).toBe(true);
+
+    await cb.setKillSwitch(false, "operator", "loss accepted");
+    expect(broker.state.peakEquityUsd).toBeCloseTo(broker.equityUsd({ USDC: 1, wNEAR: 2 }));
+    tick(10_000);
+    await cb.monitor();
+    expect(broker.state.killSwitch).toBe(false);
+    expect(journal.events.filter((e) => e.type === "kill_switch")).toHaveLength(2); // trip + release, no re-trip
+    expect((await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 10 })).verdict).toBe("allow");
+  });
+
+  it("a release with no price for a held asset keeps the old peak", async () => {
+    const { cb, quoter, broker } = await crashed({ autoFlatten: false });
+    await cb.monitor();
+    const peak = broker.state.peakEquityUsd;
+    quoter.tokensFail = true;
+    await cb.setKillSwitch(false, "operator", "resume");
+    expect(broker.state.peakEquityUsd).toBe(peak);
+  });
+
   it("monitor does nothing when the price feed is down", async () => {
     const { cb, quoter, broker, journal } = setup(open);
     await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 8_000 });

@@ -125,7 +125,8 @@ pnpm dashboard --onchain --agent   # buys settle through the testnet vault; mome
 - **Trip kill-switch** → status turns red, every order is blocked with `kill_switch`, and the vault is
   frozen on-chain. **Release (off-chain)** re-opens the engine, but buys still fail with
   `CB_BLOCKED:kill_switch` until the vault owner releases it with their own key (the dashboard shows the
-  exact `near` command).
+  exact `near` command). A release means the operator accepts the loss so far: the drawdown peak is reset to
+  the current equity, so the monitor does not re-trip on the same loss 10 s later.
 - Gauges: equity and PnL, drawdown from peak, daily loss, orders in the last hour, exposure per asset,
   each against its policy limit. The vault card reads `get_config` from the contract.
 

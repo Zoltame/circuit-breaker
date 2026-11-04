@@ -79,10 +79,17 @@ export class CircuitBreaker {
   /**
    * Manual kill-switch. Turning it on also freezes the on-chain vault; turning it off only releases
    * the off-chain gate: the vault stays frozen until its owner releases it with their own key.
+   * A release is the operator accepting the loss so far: the drawdown peak is reset to the current equity,
+   * otherwise the monitor would re-trip on the same old loss 10 s later.
    */
   setKillSwitch(on: boolean, by: string, reason: string): Promise<void> {
     const run = this.queue.then(async () => {
       this.deps.broker.setKillSwitch(on);
+      if (!on) {
+        const { prices } = await this.prices();
+        // Without a price for a held asset the equity is unknown: keep the old peak rather than guess.
+        if (!this.blind(prices)) this.deps.broker.state.peakEquityUsd = this.deps.broker.equityUsd(prices);
+      }
       const onchain = on ? await this.deps.vault?.tripKillSwitch(reason) : undefined;
       this.deps.journal.append({
         type: "kill_switch",
