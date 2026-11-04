@@ -6,6 +6,8 @@ Built at NEAR HACKATHON (Nov 1–14, 2026). Tracks: `security`, `agents`, `defi`
 > Status: policy engine, executor, agent, on-chain vault, live dashboard, reduce-only exits and a multi-agent
 > (swarm) mode, a DAO-owned vault and a scripted prompt-injection demo work. 126 tests. Execution is paper trading at real quotes; the vault runs
 > on NEAR testnet.
+> **Watch the demo:** [circuit-breaker-psi.vercel.app](https://circuit-breaker-psi.vercel.app), a replay of a recorded run on NEAR testnet
+> (every transaction link is real).
 > Live testnet vault: [`cbreaker-vault-7fvc5.testnet`](https://testnet.nearblocks.io/address/cbreaker-vault-7fvc5.testnet),
 > owned by the Sputnik DAO [`cbreaker-7fvc5.sputnikv2.testnet`](https://testnet.nearblocks.io/address/cbreaker-7fvc5.sputnikv2.testnet).
 
@@ -136,6 +138,10 @@ About two minutes, narrated in the dashboard, everything real except the agent's
 - Each run moves about 0.56 testnet NEAR through the vault (cap 3 NEAR/day), so about five runs a day.
   `CB_DEMO_PAUSE_MS` (default 2500) sets the pace. Act 4 needs `DAO_ACCOUNT_ID` / `DAO_COUNCIL` and the council
   keys in the keychain; the vault must be open when a run starts.
+
+Hosted replay: `pnpm demo --record packages/dashboard/replay/session.json` (then *Run demo*), `pnpm replay:build`,
+`vercel deploy --prod --cwd site`. The page answers the dashboard's API calls from the recording, so it needs no
+server and no key.
 
 ### Live dashboard
 

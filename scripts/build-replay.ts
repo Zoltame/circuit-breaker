@@ -15,8 +15,11 @@ if (!existsSync(session)) {
   process.exit(1);
 }
 
-rmSync(OUT, { recursive: true, force: true });
-mkdirSync(OUT);
+// Keep the Vercel project link (site/.vercel) across rebuilds; drop everything else.
+for (const f of existsSync(OUT) ? readdirSync(OUT) : []) if (f !== ".vercel") rmSync(join(OUT, f), { recursive: true, force: true });
+mkdirSync(OUT, { recursive: true });
+// Never publish local env files (`vercel link` writes an .env.local with a token).
+writeFileSync(join(OUT, ".vercelignore"), [".env*", ".gitignore", ""].join("\n"));
 for (const f of readdirSync(PUBLIC)) copyFileSync(join(PUBLIC, f), join(OUT, f));
 copyFileSync(join(REPLAY, "replay.js"), join(OUT, "replay.js"));
 copyFileSync(join(REPLAY, "replay.css"), join(OUT, "replay.css"));
