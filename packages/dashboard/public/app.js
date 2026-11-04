@@ -7,7 +7,7 @@ const fmtPct = (n) => `${Number(n).toFixed(2)}%`;
 const yoctoToNear = (y) => Number(BigInt(y) / 10n ** 18n) / 1e6;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-const state = { snapshot: null, events: [], account: null, vault: null };
+const state = { snapshot: null, events: [], account: null, vault: null, journal: null };
 
 // ---------------------------------------------------------------- rendering
 
@@ -133,6 +133,11 @@ function row(e) {
       <td><span class="badge warn">FLATTEN</span></td>
       <td><div class="reason">${esc(e.reason)}</div></td><td></td><td></td></tr>`;
   }
+  if (e.type === "anchor") {
+    return `<tr class="anchor-row"><td class="time">${t}</td><td class="agent">agent key</td><td>Journal anchored up to #${e.anchoredSeq}</td>
+      <td><span class="badge ${e.onchain.status === "settled" ? "allow" : "warn"}">ANCHOR</span></td>
+      <td><div class="reason"><code>${esc(e.anchoredHash.slice(0, 16))}…</code></div></td><td></td><td>${onchainCell(e.onchain)}</td></tr>`;
+  }
   if (e.type === "vault_direct") {
     return `<tr><td class="time">${t}</td><td class="agent">agent key</td><td>vault.execute_order ${fmtUsd(e.amountUsd)}</td>
       <td><span class="badge ${e.onchain.status === "settled" ? "allow" : "block"}">${e.onchain.status === "settled" ? "SETTLED" : "VAULT BLOCK"}</span></td>
@@ -205,8 +210,9 @@ function renderVault() {
       <dt>Cap per order</dt><dd>${perOrder} NEAR</dd>
       <dt>Spent today</dt><dd>${spent} / ${perDay} NEAR</dd>
       <dt>Venues</dt><dd>${v.venues.map((x) => `<code>${esc(x)}</code>`).join("<br>")}</dd>
-      <dt>Agent key</dt><dd><code>${esc(v.agent_id)}</code><br><span class="muted">function-call only: execute_order, trip_kill_switch</span></dd>
+      <dt>Agent key</dt><dd><code>${esc(v.agent_id)}</code><br><span class="muted">function-call only: execute_order, trip_kill_switch, anchor_journal</span></dd>
       <dt>Orders settled</dt><dd>${v.orders_executed}</dd>
+      ${journalRow()}
     </dl>
     <div class="bar" style="margin-top:12px"><span style="width:${perDay ? Math.min(100, (spent / perDay) * 100) : 0}%"></span><i></i></div>`;
   renderAccount();
@@ -218,6 +224,17 @@ function renderVault() {
     <code>pnpm dao propose set_kill_switch '{"on":false,"reason":"reviewed"}'</code> then <code>pnpm dao approve &lt;id&gt; 1</code> and <code>pnpm dao approve &lt;id&gt; 2</code>`
     : `The on-chain vault is <b>frozen</b>. The agent can trip it but never release it. Only the owner can, with their own key:<br>
     <code>near contract call-function as-transaction ${esc(id)} set_kill_switch json-args '{"on":false,"reason":"reviewed"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${esc(v.owner_id)} network-config testnet sign-with-keychain send</code>`;
+}
+
+const JOURNAL_BADGE = { intact: ["allow", "VERIFIED"], tampered: ["block", "TAMPERED"], not_anchored: ["warn", "NOT ANCHORED"] };
+
+/** Hash-chained journal, checked against the hashes the agent anchored in the vault. */
+function journalRow() {
+  const j = state.journal;
+  if (!j) return "";
+  const [cls, label] = JOURNAL_BADGE[j.verdict] ?? ["warn", j.verdict];
+  return `<dt>Journal</dt><dd><span class="badge ${cls}">${label}</span> <span class="muted">${j.anchors} anchor${j.anchors === 1 ? "" : "s"}</span>
+    <div class="reason" title="${esc(j.journalId ?? "")}">${esc(j.message)}</div></dd>`;
 }
 
 /** Sputnik DAOs live under their factory account, e.g. name.sputnikv2.testnet. */
@@ -267,6 +284,7 @@ async function loadSnapshot() {
   state.events = s.events;
   state.account = s.account;
   state.vault = s.vault;
+  state.journal = s.journal ?? null;
   renderAll();
 }
 
@@ -294,6 +312,10 @@ function connect() {
   });
   es.addEventListener("reset", () => void loadSnapshot());
   es.addEventListener("demo", () => void loadSnapshot());
+  es.addEventListener("journal_check", (m) => {
+    state.journal = JSON.parse(m.data);
+    renderVault();
+  });
   es.addEventListener("vault", (m) => {
     state.vault = JSON.parse(m.data);
     renderVault();

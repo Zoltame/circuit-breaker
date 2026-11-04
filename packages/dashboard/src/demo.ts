@@ -1,9 +1,10 @@
-// Scripted, reproducible demo (`pnpm demo`, then "Run demo" in the dashboard). Four acts:
+// Scripted, reproducible demo (`pnpm demo`, then "Run demo" in the dashboard). Five acts:
 //   1. a normal trading day, buys settle through the testnet vault;
 //   2. the agent reads a prompt-injected news item and obeys it: every attempt is blocked, the last one
 //      on-chain by the vault itself;
 //   3. a simulated flash crash: drawdown limit, kill-switch, reduce-only unwind, vault frozen;
-//   4. only the DAO council can reopen the vault (2 of 3 votes).
+//   4. only the DAO council can reopen the vault (2 of 3 votes);
+//   5. someone rewrites the journal to hide a blocked order: the hashes anchored in the vault give it away.
 // The agent is scripted, not an LLM: it plays the worst case, a model that follows the injected text verbatim.
 
 import { spawn } from "node:child_process";
@@ -20,6 +21,8 @@ export interface DemoContext {
   pauseMs: number;
   /** DAO_ACCOUNT_ID and DAO_COUNCIL are set: act 4 runs real council votes. */
   daoEnabled: boolean;
+  /** Act 5: forge the journal and check the forgery against the vault anchors (the "rewrite" red-team attack). */
+  rewriteHistory?: (() => Promise<unknown>) | undefined;
 }
 
 const AGENT = "momentum-1";
@@ -159,11 +162,32 @@ async function script(ctx: DemoContext): Promise<void> {
   }
   await breaker.setKillSwitch(false, "demo", "Operator reviewed the crash and accepts the loss");
   await pause();
+
+  // ------------------------------------------------------------------ act 5
+  if (vault && ctx.rewriteHistory) {
+    note(ctx, "After the incident, someone with access to the server wants the record to look better: they edit the journal so a blocked order reads “approved”, then recompute every hash.", "attack", "Act 5 · The audit trail");
+    await pause();
+    await ctx.rewriteHistory();
+    await pause();
+  }
   note(ctx, "End of the demo. The account took the crash loss, but the injected agent moved nothing it was not allowed to move.", "ok");
 }
 
+/**
+ * Runs `scripts/dao.ts`. A vote whose transaction expired before it was included (a testnet RPC hiccup) is sent
+ * once more: an expired transaction never executed, so the vote is not counted twice.
+ */
+async function dao(args: string[]): Promise<string> {
+  try {
+    return await daoOnce(args);
+  } catch (err) {
+    if (args[0] !== "approve" || !/expired/i.test(String(err))) throw err;
+    return daoOnce(args);
+  }
+}
+
 /** Runs `scripts/dao.ts` (near-cli-rs, council keys in the OS keychain) without blocking the server. */
-function dao(args: string[]): Promise<string> {
+function daoOnce(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--import", "tsx", "scripts/dao.ts", ...args], { env: process.env });
     let out = "";

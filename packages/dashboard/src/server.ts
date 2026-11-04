@@ -5,15 +5,21 @@
 //   --demo shows a "Run demo" button that plays the scripted scenario (src/demo.ts); see `pnpm demo`.
 //   --record <file> saves every live update of the next demo run, for the static replay (`pnpm replay:build`).
 
-import { createReadStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { meanReversion, momentum, runAgent } from "@circuit-breaker/agent";
 import {
+  AnchoringJournal,
   JOURNAL_FILE,
   PaperBroker,
   buildBreaker,
+  forgeChain,
+  verifyChain,
+  verifyJournalFile,
+  verifyJournalLines,
+  type JournalVerification,
   type Journal,
   type JournalEvent,
   type VaultConfig,
@@ -61,12 +67,17 @@ const tee = (inner: Journal): Journal => ({
       .catch(() => undefined);
     // Anything that may have changed the contract: push its fresh config to the browsers.
     const touchesChain = ev.type === "kill_switch" || ev.type === "vault_direct" || ev.type === "note" || (ev.type === "decision" && ev.execution?.onchain);
+    // A new anchor: re-check the whole journal against the vault, in journal order with the other updates.
+    if (ev.type === "anchor") {
+      broadcastChain = broadcastChain.then(() => journalCheck(true)).then((c) => broadcast("journal_check", c)).catch(() => undefined);
+    }
     if (touchesChain && vault) {
       vaultCache.at = 0;
       void vaultConfig().then((cfg) => cfg && broadcast("vault", cfg));
     }
   },
   read: () => inner.read(),
+  head: () => inner.head?.(),
 });
 
 const { breaker, broker, vault, market } = buildBreaker({ onchain: flag("onchain"), wrapJournal: tee });
@@ -120,6 +131,7 @@ async function resetAccount(): Promise<void> {
   broker.state = PaperBroker.fresh(START_CASH, Date.now()).state;
   writeFileSync(JOURNAL_FILE, "");
   recent.length = 0;
+  checkCache = null;
   breaker.persist();
   broadcast("reset", { account: await account() });
 }
@@ -134,6 +146,26 @@ async function vaultConfig(): Promise<VaultConfig | null> {
     // keep the last known config
   }
   return vaultCache.cfg;
+}
+
+// ---------------------------------------------------------------- journal integrity
+
+/** What the browser shows about the journal: the verdict of the chain + anchors check, without the hash map. */
+const summary = (v: JournalVerification) => ({
+  verdict: v.verdict,
+  message: v.message,
+  entries: v.entries,
+  anchors: v.anchors,
+  lastAnchoredSeq: v.lastAnchoredSeq,
+  journalId: v.journalId,
+});
+
+let checkCache: { at: number; out: ReturnType<typeof summary> } | null = null;
+async function journalCheck(fresh = false) {
+  if (!fresh && checkCache && Date.now() - checkCache.at < 3_000) return checkCache.out;
+  const out = summary(await verifyJournalFile(JOURNAL_FILE, vault));
+  checkCache = { at: Date.now(), out };
+  return out;
 }
 
 // ---------------------------------------------------------------- red team
@@ -202,6 +234,43 @@ const RED_TEAM: Record<string, { label: string; run: () => Promise<unknown> }> =
       return ev;
     },
   },
+  rewrite: {
+    label: "Rewrite history: turn a blocked order into an approved one",
+    // An attacker with disk access edits the journal and recomputes every hash after the edit. The check runs
+    // on a forged copy: the real file stays as it is, so the dashboard keeps working after the attack.
+    run: async () => {
+      if (!vault) throw new Error("Start the dashboard with --onchain: only the on-chain anchors can catch this attack");
+      if (breaker.journal instanceof AnchoringJournal) await breaker.journal.anchor();
+      // The most recent blocked order: the kind of entry someone would want gone after an incident.
+      const lines = readFileSync(JOURNAL_FILE, "utf8").split("\n");
+      const blocked = lines
+        .filter((l) => l.trim() !== "")
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((e) => e.type === "decision" && e.verdict === "block" && typeof e.seq === "number");
+      const target = blocked.at(-1);
+      const forged = forgeChain(lines, (e, seq) =>
+        target && seq === target.seq
+          ? { ...e, verdict: "allow", triggeredRule: null, reason: "Order approved", observed: null, limit: null }
+          : undefined,
+      );
+      if (forged.editedSeq === null || !target) throw new Error("No blocked order in the journal yet: run another attack first");
+      const local = verifyChain(forged.lines);
+      // The auditor checks the journal they know about: the live one, whose id the server holds.
+      const check = await verifyJournalLines(forged.lines, vault, breaker.journal.head?.()?.journalId);
+      const order = target.order as { side: string; notionalUsd: number; asset: string };
+      const caught = check.verdict === "tampered";
+      breaker.journal.append({
+        type: "note",
+        timestamp: new Date().toISOString(),
+        tone: caught ? "ok" : "attack",
+        text:
+          `Attacker rewrote entry #${forged.editedSeq} (${order.side} $${order.notionalUsd} ${order.asset}: blocked by ${String(target.triggeredRule)}, now "approved") ` +
+          `and recomputed every hash after it. Local chain alone: ${local.error ? "broken" : "looks valid"}. ` +
+          `Against the vault anchors: ${caught ? "TAMPERED. " : ""}${check.message}. (Checked on a forged copy; the real journal is untouched.)`,
+      });
+      return { editedSeq: forged.editedSeq, localChainValid: !local.error, ...summary(check) };
+    },
+  },
 };
 
 // ---------------------------------------------------------------- http
@@ -256,6 +325,7 @@ const server = createServer(async (req, res) => {
         policy: breaker.policy,
         account: await account(),
         vault: await vaultConfig(),
+        journal: await journalCheck().catch(() => null),
         events: recent.slice(-200),
         redTeam: Object.fromEntries(Object.entries(RED_TEAM).map(([k, v]) => [k, v.label])),
       });
@@ -266,6 +336,9 @@ const server = createServer(async (req, res) => {
       clients.add(res);
       req.on("close", () => clients.delete(res));
       return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/journal/verify") {
+      return json(res, 200, await journalCheck(true));
     }
     if (req.method === "GET" && url.pathname === "/api/vault") {
       return json(res, 200, await vaultConfig());
@@ -325,6 +398,7 @@ const server = createServer(async (req, res) => {
         },
         pauseMs: Number(process.env.CB_DEMO_PAUSE_MS ?? 2_500),
         daoEnabled: Boolean(process.env.DAO_ACCOUNT_ID && process.env.DAO_COUNCIL),
+        rewriteHistory: RED_TEAM.rewrite?.run,
       })
         .catch((err) => console.error("demo:", err))
         .finally(() => {

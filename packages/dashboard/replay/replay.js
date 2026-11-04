@@ -5,7 +5,7 @@
 
 (() => {
   const listeners = {};
-  const cur = { events: [], account: null, vault: null };
+  const cur = { events: [], account: null, vault: null, journal: null };
   let session = null;
   let next = 0; // index of the next frame to play
   let clock = 0; // replay time, ms since the recording started
@@ -39,10 +39,12 @@
         redTeam: session.redTeam,
         account: cur.account,
         vault: cur.vault,
+        journal: cur.journal,
         events: cur.events.slice(-200),
       });
     }
     if (url.startsWith("/api/vault")) return reply(200, cur.vault);
+    if (url.startsWith("/api/journal/verify")) return reply(200, cur.journal);
     return reply(404, { error: "not found" });
   };
 
@@ -65,7 +67,9 @@
     else if (frame.kind === "reset") {
       cur.events = [];
       cur.account = d.account;
+      cur.journal = null;
     } else if (frame.kind === "vault") cur.vault = d;
+    else if (frame.kind === "journal_check") cur.journal = d;
     for (const fn of listeners[frame.kind] ?? []) fn({ data: JSON.stringify(d) });
   }
 

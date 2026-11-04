@@ -10,10 +10,10 @@ is bypassed or compromised.
 |---|---|---|
 | owner (a Sputnik DAO on testnet) | set per-token caps, whitelist venues, set/release kill-switch, withdraw, change agent, propose a new owner | make the agent owner |
 | pending owner | `accept_owner` (step 2 of a transfer) | anything else until it accepts |
-| agent | `execute_order` within caps to a whitelisted venue, `trip_kill_switch` | release the kill-switch, change caps, withdraw, anything else |
+| agent | `execute_order` within caps to a whitelisted venue, `trip_kill_switch`, `anchor_journal` | release the kill-switch, change caps, withdraw, rewrite an anchor, anything else |
 
 The agent account holds **only a function-call access key** with
-`receiver_id = <vault>` and `method_names = [execute_order, trip_kill_switch]`. NEAR itself then refuses,
+`receiver_id = <vault>` and `method_names = [execute_order, trip_kill_switch, anchor_journal]`. NEAR itself then refuses,
 before the contract runs: calls to other methods or contracts, attached deposits, NEAR transfers,
 key management. The vault attaches the NEP-141 1 yoctoNEAR itself when it moves tokens.
 
@@ -28,6 +28,18 @@ spent; an account that has only function-call keys cannot transfer NEAR or add k
 
 Two steps mean a mistyped account can never receive the vault. `get_config` shows `owner_id` and
 `pending_owner_id`. The agent can be neither owner nor pending owner.
+
+## Journal anchors
+
+`anchor_journal(journal_id, seq, hash)` (agent or owner) records that entry `seq` of the off-chain decision
+journal `journal_id` has SHA-256 `hash` (64 lowercase hex chars). Anchors of a journal are append-only: `seq`
+must be past the last anchored entry, so an anchored position can never be overwritten. It works while the
+vault is frozen and emits a `journal_anchor` event. Views: `get_journals()` (each journal with its latest
+anchor) and `get_anchors(journal_id, from_index?, limit?)`, oldest first. `pnpm journal:verify` compares a
+journal file with them.
+
+The state layout gained two collections for this; `migrate()` (private, `#[init(ignore_state)]`) upgraded the
+live vault in place, keeping owner, caps, usage and kill-switch.
 
 ## Checks in `execute_order` (first failure panics with `CB_BLOCKED:<rule>`)
 

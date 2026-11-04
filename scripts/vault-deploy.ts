@@ -50,7 +50,7 @@ call("add_venue", { venue });
 const key = KeyPair.fromRandom("ed25519");
 near([
   "account", "add-key", agent, "grant-function-call-access",
-  "--allowance", q("1 NEAR"), "--contract-account-id", vault, "--function-names", "execute_order,trip_kill_switch",
+  "--allowance", q("1 NEAR"), "--contract-account-id", vault, "--function-names", "execute_order,trip_kill_switch,anchor_journal",
   "use-manually-provided-public-key", key.getPublicKey().toString(), ...["network-config", NETWORK, "sign-with-keychain", "send"],
 ]);
 

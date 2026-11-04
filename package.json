@@ -20,7 +20,9 @@
     "dao": "tsx --env-file=.env scripts/dao.ts",
     "vault:trip": "tsx --env-file=.env scripts/vault-trip.ts",
     "demo": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts --onchain --demo --data data-demo",
-    "replay:build": "tsx scripts/build-replay.ts"
+    "replay:build": "tsx scripts/build-replay.ts",
+    "agent:rotate-key": "tsx --env-file=.env scripts/agent-key.ts",
+    "journal:verify": "tsx --env-file-if-exists=.env scripts/journal-verify.ts"
   },
   "devDependencies": {
     "@circuit-breaker/agent": "workspace:*",

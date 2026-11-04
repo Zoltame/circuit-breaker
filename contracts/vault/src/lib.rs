@@ -8,6 +8,9 @@
 //!   `execute_order` and `trip_kill_switch` and nothing else. It cannot attach deposits, cannot
 //!   call other contracts, cannot transfer NEAR. The vault attaches deposits itself when needed.
 //!
+//! Audit: the agent anchors the head of its hash-chained decision journal here (`anchor_journal`).
+//! Anchors are append-only, so a compromised machine cannot rewrite history that was already anchored.
+//!
 //! These limits hold even if the off-chain policy engine is bypassed or compromised.
 //! Rejections panic with `CB_BLOCKED:<rule>: ...`, so they show up as failed transactions.
 
@@ -58,6 +61,40 @@ pub struct ConfigView {
     pub orders_executed: u64,
 }
 
+/// Latest anchor of one journal (a journal is identified by the hash of its first entry).
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct JournalHead {
+    pub anchors: u64,
+    pub last_seq: u64,
+    pub last_hash: String,
+    /// Block timestamp (ns) of the last anchor.
+    pub last_at: u64,
+}
+
+/// One anchored journal position: entry `seq` of the journal has hash `hash`.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Anchor {
+    pub seq: u64,
+    pub hash: String,
+    pub at: u64,
+    pub by: AccountId,
+}
+
+/// State layout before journal anchoring, read once by `migrate`.
+#[near(serializers = [borsh])]
+pub struct VaultV1 {
+    owner_id: AccountId,
+    agent_id: AccountId,
+    kill_switch: bool,
+    limits: IterableMap<String, TokenLimits>,
+    venues: IterableSet<AccountId>,
+    usage: LookupMap<String, DailyUsage>,
+    orders_executed: u64,
+    pending_owner_id: Option<AccountId>,
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Vault {
@@ -69,6 +106,15 @@ pub struct Vault {
     usage: LookupMap<String, DailyUsage>,
     orders_executed: u64,
     pending_owner_id: Option<AccountId>,
+    journals: IterableMap<String, JournalHead>,
+    /// Key `<journal_id>#<index>`.
+    anchors: LookupMap<String, Anchor>,
+}
+
+const MAX_JOURNAL_ID_LEN: usize = 64;
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn blocked(rule: &str, detail: String) -> ! {
@@ -99,6 +145,28 @@ impl Vault {
             usage: LookupMap::new(b"u"),
             orders_executed: 0,
             pending_owner_id: None,
+            journals: IterableMap::new(b"j"),
+            anchors: LookupMap::new(b"a"),
+        }
+    }
+
+    /// One-off upgrade from the layout without journal anchoring. Only the contract account can run it,
+    /// right after deploying the new code; existing limits, usage and owner are kept as they are.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate() -> Self {
+        let old: VaultV1 = env::state_read().unwrap_or_else(|| env::panic_str("No state to migrate"));
+        Self {
+            owner_id: old.owner_id,
+            agent_id: old.agent_id,
+            kill_switch: old.kill_switch,
+            limits: old.limits,
+            venues: old.venues,
+            usage: old.usage,
+            orders_executed: old.orders_executed,
+            pending_owner_id: old.pending_owner_id,
+            journals: IterableMap::new(b"j"),
+            anchors: LookupMap::new(b"a"),
         }
     }
 
@@ -219,6 +287,27 @@ impl Vault {
         event("kill_switch", near_sdk::serde_json::json!({ "on": true, "by": caller, "reason": reason }));
     }
 
+    /// Records that entry `seq` of journal `journal_id` has hash `hash` (SHA-256, hex). Append-only: each
+    /// anchor of a journal must be past the previous one. Works while the vault is frozen: the audit trail
+    /// matters most then.
+    pub fn anchor_journal(&mut self, journal_id: String, seq: u64, hash: String) {
+        let caller = env::predecessor_account_id();
+        require!(caller == self.agent_id || caller == self.owner_id, "Only the agent or owner can anchor");
+        require!(!journal_id.is_empty() && journal_id.len() <= MAX_JOURNAL_ID_LEN, "Invalid journal id");
+        require!(is_sha256_hex(&hash), "hash must be 64 lowercase hex chars (SHA-256)");
+        let at = env::block_timestamp();
+        let head = match self.journals.get(&journal_id) {
+            Some(h) => {
+                require!(seq > h.last_seq, "Anchors are append-only: seq must be past the last anchored entry");
+                JournalHead { anchors: h.anchors + 1, last_seq: seq, last_hash: hash.clone(), last_at: at }
+            }
+            None => JournalHead { anchors: 1, last_seq: seq, last_hash: hash.clone(), last_at: at },
+        };
+        self.anchors.insert(format!("{journal_id}#{}", head.anchors - 1), Anchor { seq, hash: hash.clone(), at, by: caller });
+        self.journals.insert(journal_id.clone(), head);
+        event("journal_anchor", near_sdk::serde_json::json!({ "journal": journal_id, "seq": seq, "hash": hash }));
+    }
+
     // ---------------------------------------------------------------- callbacks
 
     /// Gives the daily allowance back if the transfer failed.
@@ -281,6 +370,19 @@ impl Vault {
             tokens,
             orders_executed: self.orders_executed,
         }
+    }
+
+    /// Every journal anchored here, with its latest anchor.
+    pub fn get_journals(&self) -> Vec<(String, JournalHead)> {
+        self.journals.iter().map(|(id, h)| (id.clone(), h.clone())).collect()
+    }
+
+    /// Anchors of one journal, oldest first.
+    pub fn get_anchors(&self, journal_id: String, from_index: Option<u64>, limit: Option<u64>) -> Vec<Anchor> {
+        let Some(head) = self.journals.get(&journal_id) else { return vec![] };
+        let from = from_index.unwrap_or(0);
+        let to = head.anchors.min(from.saturating_add(limit.unwrap_or(100)));
+        (from..to).filter_map(|i| self.anchors.get(&format!("{journal_id}#{i}")).cloned()).collect()
     }
 
     pub fn get_usage(&self, token: String) -> DailyUsage {
@@ -530,6 +632,88 @@ mod tests {
         assert_eq!(v.get_config().pending_owner_id, None);
         ctx(dao(), DAY1);
         v.accept_owner();
+    }
+
+    const H1: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+    const H2: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+    #[test]
+    fn anchors_are_append_only_and_readable() {
+        let mut v = setup();
+        ctx(agent(), DAY1);
+        v.anchor_journal("j1".into(), 9, H1.into());
+        v.anchor_journal("j1".into(), 19, H2.into());
+        let anchors = v.get_anchors("j1".into(), None, None);
+        assert_eq!(anchors.iter().map(|a| (a.seq, a.hash.as_str())).collect::<Vec<_>>(), vec![(9, H1), (19, H2)]);
+        assert_eq!(anchors[0].by, agent());
+        let journals = v.get_journals();
+        assert_eq!(journals.len(), 1);
+        assert_eq!((journals[0].1.anchors, journals[0].1.last_seq), (2, 19));
+        assert!(v.get_anchors("unknown".into(), None, None).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "append-only")]
+    fn cannot_rewrite_an_anchored_position() {
+        let mut v = setup();
+        ctx(agent(), DAY1);
+        v.anchor_journal("j1".into(), 9, H1.into());
+        v.anchor_journal("j1".into(), 9, H2.into());
+    }
+
+    #[test]
+    fn anchoring_works_while_frozen() {
+        let mut v = setup();
+        ctx(agent(), DAY1);
+        v.trip_kill_switch("drawdown".into());
+        v.anchor_journal("j1".into(), 0, H1.into());
+        assert_eq!(v.get_anchors("j1".into(), None, None).len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the agent or owner can anchor")]
+    fn strangers_cannot_anchor() {
+        let mut v = setup();
+        ctx("stranger.testnet".parse().unwrap(), DAY1);
+        v.anchor_journal("j1".into(), 0, H1.into());
+    }
+
+    #[test]
+    #[should_panic(expected = "SHA-256")]
+    fn rejects_a_malformed_hash() {
+        let mut v = setup();
+        ctx(agent(), DAY1);
+        v.anchor_journal("j1".into(), 0, "not-a-hash".into());
+    }
+
+    #[test]
+    fn migrate_keeps_the_v1_state() {
+        let mut v1 = setup();
+        ctx(agent(), DAY1);
+        order(&mut v1, 100);
+        v1.trip_kill_switch("drawdown".into());
+        ctx("vault.testnet".parse().unwrap(), DAY1);
+        let old = VaultV1 {
+            owner_id: v1.owner_id.clone(),
+            agent_id: v1.agent_id.clone(),
+            kill_switch: v1.kill_switch,
+            limits: std::mem::replace(&mut v1.limits, IterableMap::new(b"x")),
+            venues: std::mem::replace(&mut v1.venues, IterableSet::new(b"y")),
+            usage: std::mem::replace(&mut v1.usage, LookupMap::new(b"z")),
+            orders_executed: v1.orders_executed,
+            pending_owner_id: None,
+        };
+        env::state_write(&old);
+        drop(old); // store collections write their cached entries on drop, as at the end of a real call
+        let mut v2 = Vault::migrate();
+        let cfg = v2.get_config();
+        assert!(cfg.kill_switch);
+        assert_eq!(cfg.orders_executed, 1);
+        assert_eq!(cfg.owner_id, owner());
+        assert_eq!(cfg.tokens[0].spent_today, U128(100));
+        assert_eq!(cfg.venues, vec![venue()]);
+        ctx(agent(), DAY1);
+        v2.anchor_journal("j1".into(), 0, H1.into());
     }
 
     #[test]

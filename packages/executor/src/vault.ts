@@ -2,6 +2,7 @@
 // The vault is the last gate for funds: if it rejects, the order is not filled.
 
 import { Account, JsonRpcProvider, actions, teraToGas, type KeyPairString } from "near-api-js";
+import type { AnchorPoint } from "./chain.ts";
 /** NEAR -> yoctoNEAR at nano-NEAR precision, so float noise (0.1000000000000000006) never reaches the chain. */
 export function nearToYoctoRounded(near: number): bigint {
   return BigInt(Math.round(near * 1e9)) * 10n ** 15n;
@@ -38,7 +39,26 @@ export interface VaultGateway {
   explorerUrl(txHash: string): string;
   /** Reads the vault's live configuration (read-only, no key needed). */
   getConfig?(): Promise<VaultConfig>;
+  /** Writes the journal head on-chain (append-only). */
+  anchorJournal?(journalId: string, seq: number, hash: string): Promise<OnchainResult>;
+  /** Every anchor the vault holds for a journal, oldest first (read-only). */
+  getAnchors?(journalId: string): Promise<AnchorPoint[]>;
   readonly vaultId?: string;
+}
+
+/** Every anchor a vault holds for a journal, oldest first. Read-only: no key involved. */
+export async function readVaultAnchors(rpcUrl: string, vaultId: string, journalId: string): Promise<AnchorPoint[]> {
+  const provider = new JsonRpcProvider({ url: rpcUrl });
+  const out: AnchorPoint[] = [];
+  for (;;) {
+    const page = (await provider.callFunction({
+      contractId: vaultId,
+      method: "get_anchors",
+      args: { journal_id: journalId, from_index: out.length, limit: 100 },
+    })) as AnchorPoint[];
+    out.push(...page.map((a) => ({ seq: a.seq, hash: a.hash })));
+    if (page.length < 100) return out;
+  }
 }
 
 export interface NearVaultOptions {
@@ -56,6 +76,8 @@ export interface NearVaultOptions {
 export class NearVaultGateway implements VaultGateway {
   private readonly agent: Account;
   private readonly provider: JsonRpcProvider;
+  /** One transaction at a time: orders, kill-switch and anchors share the agent key and its nonce. */
+  private lock: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly o: NearVaultOptions) {
     this.provider = new JsonRpcProvider({ url: o.rpcUrl });
@@ -87,7 +109,21 @@ export class NearVaultGateway implements VaultGateway {
     return this.call("trip_kill_switch", { reason: reason.slice(0, 200) });
   }
 
-  private async call(method: string, args: object, amountYocto?: string): Promise<OnchainResult> {
+  anchorJournal(journalId: string, seq: number, hash: string): Promise<OnchainResult> {
+    return this.call("anchor_journal", { journal_id: journalId, seq, hash });
+  }
+
+  getAnchors(journalId: string): Promise<AnchorPoint[]> {
+    return readVaultAnchors(this.o.rpcUrl, this.o.vaultId, journalId);
+  }
+
+  private call(method: string, args: object, amountYocto?: string): Promise<OnchainResult> {
+    const run = this.lock.then(() => this.send(method, args, amountYocto));
+    this.lock = run.catch(() => undefined);
+    return run;
+  }
+
+  private async send(method: string, args: object, amountYocto?: string): Promise<OnchainResult> {
     const extra = amountYocto ? { amountYocto } : {};
     try {
       const res = (await this.agent.signAndSendTransaction({

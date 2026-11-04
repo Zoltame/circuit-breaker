@@ -4,7 +4,7 @@
 Built at NEAR HACKATHON (Nov 1–14, 2026). Tracks: `security`, `agents`, `defi`.
 
 > Status: policy engine, executor, agent, on-chain vault, live dashboard, reduce-only exits and a multi-agent
-> (swarm) mode, a DAO-owned vault and a scripted prompt-injection demo work. 126 tests. Execution is paper trading at real quotes; the vault runs
+> (swarm) mode, a DAO-owned vault, a tamper-evident journal anchored on-chain and a scripted prompt-injection demo work. 145 tests. Execution is paper trading at real quotes; the vault runs
 > on NEAR testnet.
 > **Watch the demo:** [circuit-breaker-psi.vercel.app](https://circuit-breaker-psi.vercel.app), a replay of a recorded run on NEAR testnet
 > (every transaction link is real).
@@ -41,6 +41,8 @@ A trading desk would never run a trader with flow caps only.
    drawdown breach unwinds every position by itself, even if the agent stops trading (see below).
 7. Optional **swarm mode**: several agents share one account, each with its own budget and its own drawdown
    limit; a failing agent is quarantined without stopping the others (see below).
+8. The decision journal is **tamper-evident**: every line is hash-chained and the head of the chain is anchored
+   in the vault, so nobody, not even the operator, can quietly rewrite what the agent did (see below).
 
 ## How NEAR is used
 
@@ -49,6 +51,7 @@ A trading desk would never run a trader with flow caps only.
 | Function-call access keys | Agent can call only the vault's trading methods, cannot attach deposits, cannot touch other contracts |
 | Smart contract (Rust, near-sdk) | Vault enforcing per-order / per-day caps, token and venue whitelists and a kill-switch the agent can trip but never release |
 | Sputnik DAO (v3, `sputnikv2.testnet` factory) | Owns the vault: every owner action is a FunctionCall proposal voted by a 3-member council (2 of 3) |
+| Contract storage as a notary | `anchor_journal`: the agent's key writes the journal's hash-chain head to the vault, append-only |
 | NEAR Intents 1Click API | Real cross-chain quotes used for pricing and the slippage rule |
 
 ## Try it
@@ -57,7 +60,7 @@ Requirements: Node ≥ 22, pnpm. No key is needed for the steps below (paper tra
 
 ```bash
 pnpm install
-pnpm test                         # 106 TS tests: policy engine, executor, agent
+pnpm test                         # 119 TS tests: policy engine, executor, agent
 pnpm propose buy wNEAR 500        # allowed: priced by a real 1Click dry quote, paper-filled
 pnpm propose buy wNEAR 2500       # blocked: max_order_size (25% of equity > 10%)
 pnpm propose buy SCAM 100         # blocked: asset_whitelist
@@ -132,6 +135,7 @@ About two minutes, narrated in the dashboard, everything real except the agent's
 | | its own key calls the vault to send $10,000 to `attacker-drain.testnet` | vault contract: `CB_BLOCKED:venue_whitelist` (failed tx) |
 | 3 · Flash crash | simulated wNEAR crash sized to a ~17% account drawdown (real prices × a factor, shown in the UI) | kill-switch, reduce-only unwind of every position, vault frozen on-chain; a later buy fails on-chain with `CB_BLOCKED:kill_switch` |
 | 4 · DAO | a council member proposes to unfreeze; after 1 vote the vault is still frozen; after 2 of 3 the DAO reopens it | Sputnik DAO |
+| 5 · Audit trail | someone edits the journal so a blocked order reads "approved" and recomputes every hash | hashes anchored in the vault: `TAMPERED` |
 
 - The agent is scripted, not an LLM: it plays the worst case, a model that follows the injected text verbatim.
   The point is that nothing depends on the model resisting the injection.
@@ -218,6 +222,36 @@ What happened on testnet (Nov 4, 2026):
 The attack table above was recorded on the first vault (`guardrail-vault-sqjpi.testnet`, same contract
 without ownership transfer); `pnpm vault:attack` replays it against the vault in `.env`.
 
+### Tamper-evident journal
+
+An incident review is only as good as its log. If the server running the agent is compromised (or the
+operator wants the record to look better), a plain log file can be edited. Circuit Breaker's journal can't,
+without it showing:
+
+- **Hash chain.** Every line of `decisions.jsonl` carries `seq`, `prev` and
+  `hash = SHA-256(prev + "\n" + line without hash)`. Editing, inserting or deleting a line breaks every hash
+  after it. A journal is named after the hash of its first entry (`j-…`).
+- **On-chain anchors.** The agent's key calls the vault's `anchor_journal(journal_id, seq, hash)` every 10 entries
+  and right after a kill-switch, flatten, quarantine or direct vault call. Anchors are append-only (each `seq`
+  must be past the previous one) and still accepted while the vault is frozen, when the record matters most.
+  Each anchor appears in the dashboard feed with its transaction.
+- **Why both.** An attacker who edits a line *and recomputes every hash after it* gets a chain that checks out
+  locally. The hashes already in the vault can't be recomputed: the forgery is caught at the first anchor
+  after the edited line.
+
+```bash
+pnpm journal:verify                                   # data/decisions.jsonl against the vault in .env
+pnpm journal:verify data-demo/decisions.jsonl --journal j-…
+# ✓ INTACT     exit 0   chain consistent, every anchor matches
+# ✗ TAMPERED   exit 1   a broken link, an anchor mismatch, a truncation, or a different journal id
+# … NOT_ANCHORED exit 2  consistent, but nothing anchored yet
+```
+
+The verifier needs no key (anchors are a view call). Pass `--journal` with the id under audit: rewriting the
+first entry renames the journal, which would otherwise pass as a new, never-anchored one. The dashboard shows
+the verdict in the vault card (`VERIFIED` / `TAMPERED`), and the red-team button *Rewrite history* (act 5 of the
+demo) forges a copy of the journal and checks it against the vault; the real file is not touched.
+
 ### Real NEAR Intents quote
 
 ```bash
@@ -233,6 +267,10 @@ pnpm spike:1click       # 1 wNEAR -> USDC dry quote, nothing is signed or sent, 
   not exceed them, withdraw, attach a deposit or call another contract (see the attack table above).
 - A function-call key cannot attach a deposit, which is why funds sit in a vault contract rather than directly
   in an agent account. NEAR Intents has no testnet: executions are paper fills at real `dry: true` quotes.
+- The journal anchors prove that the anchored part of the journal was not changed afterwards. Entries after the
+  last anchor (at most 9, or none right after an incident) are only protected by the local chain, and lines
+  written before the chain existed (older journals) are not protected at all. Anchoring proves integrity, not
+  truth: a compromised engine could log lies from the start, which is why the vault enforces its own caps.
 - The DAO governs the vault's **contract state**. The vault account still has a full-access key (used to deploy
   it), and that key could redeploy the code. On mainnet that key must be deleted after deployment (or the
   contract made upgradable only through the DAO); on testnet it is kept so the demo can be redeployed.

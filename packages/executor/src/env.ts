@@ -5,6 +5,7 @@ import { CircuitBreaker } from "./circuit-breaker.ts";
 import { JsonlJournal, type Journal } from "./journal.ts";
 import { OneClickClient } from "./oneclick.ts";
 import { PaperBroker, type PaperState } from "./paper.ts";
+import { AnchoringJournal } from "./anchor.ts";
 import { ShockQuoter } from "./shock.ts";
 import { NearVaultGateway } from "./vault.ts";
 import { loadPolicyYaml } from "@circuit-breaker/policy-engine";
@@ -38,7 +39,7 @@ export function buildBreaker(opts: { onchain?: boolean; wrapJournal?: (j: Journa
     ? new PaperBroker(JSON.parse(readFileSync(STATE_FILE, "utf8")) as PaperState)
     : PaperBroker.fresh(10_000, Date.now());
   const file = new JsonlJournal(JOURNAL_FILE);
-  const journal = opts.wrapJournal ? opts.wrapJournal(file) : file;
+  const teed = opts.wrapJournal ? opts.wrapJournal(file) : file;
 
   let vault: NearVaultGateway | undefined;
   if (opts.onchain) {
@@ -55,6 +56,9 @@ export function buildBreaker(opts: { onchain?: boolean; wrapJournal?: (j: Journa
       ...(process.env.VAULT_NEAR_PER_USD ? { nearPerUsd: Number(process.env.VAULT_NEAR_PER_USD) } : {}),
     });
   }
+
+  // With a vault, the journal head is anchored on-chain as it grows.
+  const journal = vault ? new AnchoringJournal(teed, vault) : teed;
 
   const market = new ShockQuoter(
     new OneClickClient({ baseUrl: process.env.ONECLICK_BASE_URL, jwt: process.env.ONECLICK_JWT, tokenCacheMs: 5_000 }),
