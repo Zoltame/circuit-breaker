@@ -48,12 +48,17 @@ function broadcast(kind: string, data: unknown): void {
   for (const c of clients) c.write(msg);
 }
 
+let broadcastChain: Promise<void> = Promise.resolve();
 const tee = (inner: Journal): Journal => ({
   append(ev) {
     inner.append(ev);
     recent.push(ev);
     if (recent.length > 500) recent.shift();
-    void account().then((acc) => broadcast("journal", { event: ev, account: acc }));
+    // Chained, so browsers (and recordings) get events in journal order even though each waits for prices.
+    broadcastChain = broadcastChain
+      .then(() => account())
+      .then((acc) => broadcast("journal", { event: ev, account: acc }))
+      .catch(() => undefined);
     // Anything that may have changed the contract: push its fresh config to the browsers.
     const touchesChain = ev.type === "kill_switch" || ev.type === "vault_direct" || ev.type === "note" || (ev.type === "decision" && ev.execution?.onchain);
     if (touchesChain && vault) {
