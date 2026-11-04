@@ -29,6 +29,30 @@
         "8790"
       ],
       "port": 8790
+    },
+    {
+      "name": "demo-record",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "demo",
+        "--port",
+        "8791",
+        "--record",
+        "packages/dashboard/replay/session.json"
+      ],
+      "port": 8791
+    },
+    {
+      "name": "replay",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8792",
+        "--directory",
+        "site"
+      ],
+      "port": 8792
     }
   ]
 }

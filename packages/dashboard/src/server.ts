@@ -3,10 +3,11 @@
 //
 // Usage: pnpm dashboard [--onchain] [--agent] [--demo] [--port 8787]
 //   --demo shows a "Run demo" button that plays the scripted scenario (src/demo.ts); see `pnpm demo`.
+//   --record <file> saves every live update of the next demo run, for the static replay (`pnpm replay:build`).
 
-import { createReadStream, existsSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { meanReversion, momentum, runAgent } from "@circuit-breaker/agent";
 import {
@@ -32,7 +33,17 @@ const START_CASH = 10_000;
 const recent: JournalEvent[] = [];
 const clients = new Set<ServerResponse>();
 
+/** What `--record` captures: every update the browsers receive, with its time offset. */
+interface Recording {
+  start: number;
+  frames: { t: number; kind: string; data: unknown }[];
+}
+const recordArg = args.indexOf("--record");
+const RECORD_FILE = recordArg >= 0 ? args[recordArg + 1] : undefined;
+let recording: Recording | null = null;
+
 function broadcast(kind: string, data: unknown): void {
+  if (recording) recording.frames.push({ t: Date.now() - recording.start, kind, data });
   const msg = `event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const c of clients) c.write(msg);
 }
@@ -43,6 +54,12 @@ const tee = (inner: Journal): Journal => ({
     recent.push(ev);
     if (recent.length > 500) recent.shift();
     void account().then((acc) => broadcast("journal", { event: ev, account: acc }));
+    // Anything that may have changed the contract: push its fresh config to the browsers.
+    const touchesChain = ev.type === "kill_switch" || ev.type === "vault_direct" || ev.type === "note" || (ev.type === "decision" && ev.execution?.onchain);
+    if (touchesChain && vault) {
+      vaultCache.at = 0;
+      void vaultConfig().then((cfg) => cfg && broadcast("vault", cfg));
+    }
   },
   read: () => inner.read(),
 });
@@ -204,6 +221,20 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 
 let agentRunning = false;
 
+function saveRecording(file: string, startVault: VaultConfig | null, frames: Recording["frames"]): void {
+  mkdirSync(dirname(file), { recursive: true });
+  const session = {
+    recordedAt: new Date().toISOString(),
+    mode: { onchain: Boolean(vault), agent: false, vaultId: vault?.vaultId ?? null, demo: false, demoRunning: false, shocks: {} },
+    policy: breaker.policy,
+    redTeam: Object.fromEntries(Object.entries(RED_TEAM).map(([k, v]) => [k, v.label])),
+    vault: startVault,
+    frames,
+  };
+  writeFileSync(file, JSON.stringify(session));
+  console.log(`Recorded ${frames.length} updates to ${file}`);
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   try {
@@ -274,6 +305,8 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/api/demo") {
       if (demoRunning()) return json(res, 409, { error: "The demo is already running" });
+      const startVault = await vaultConfig();
+      if (RECORD_FILE) recording = { start: Date.now(), frames: [] };
       // Runs in the background: the browser follows it through the live journal.
       void runDemo({
         breaker,
@@ -289,7 +322,17 @@ const server = createServer(async (req, res) => {
         daoEnabled: Boolean(process.env.DAO_ACCOUNT_ID && process.env.DAO_COUNCIL),
       })
         .catch((err) => console.error("demo:", err))
-        .finally(() => broadcast("demo", { running: false }));
+        .finally(() => {
+          broadcast("demo", { running: false });
+          // Broadcasts are async (each waits for a fresh account view): let the last ones land in the recording.
+          if (RECORD_FILE && recording) {
+            setTimeout(() => {
+              if (!recording) return;
+              saveRecording(RECORD_FILE, startVault, recording.frames);
+              recording = null;
+            }, 4_000);
+          }
+        });
       broadcast("demo", { running: true });
       return json(res, 202, { ok: true });
     }

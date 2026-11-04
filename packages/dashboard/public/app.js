@@ -294,6 +294,10 @@ function connect() {
   });
   es.addEventListener("reset", () => void loadSnapshot());
   es.addEventListener("demo", () => void loadSnapshot());
+  es.addEventListener("vault", (m) => {
+    state.vault = JSON.parse(m.data);
+    renderVault();
+  });
 }
 
 async function post(path, payload) {

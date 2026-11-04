@@ -1,0 +1,24 @@
+/* Player bar of the hosted replay (replay.js). */
+.replay-bar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 8px 20px; background: #10213d; border-bottom: 1px solid #23406e; font-size: 13px;
+}
+.replay-tag { font-weight: 800; letter-spacing: 0.08em; color: var(--accent); }
+.replay-text { color: var(--text); flex: 1 1 260px; min-width: 0; }
+.replay-controls { display: flex; gap: 6px; }
+.replay-controls button {
+  padding: 4px 10px; border: 1px solid #23406e; background: transparent; color: var(--text); border-radius: 6px;
+}
+.replay-controls button.on { background: var(--accent); color: #0b0d11; border-color: var(--accent); }
+.replay-progress { flex: 1 0 100%; height: 3px; background: #23406e; border-radius: 2px; overflow: hidden; }
+.replay-progress span { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.1s linear; }
+/* The topbar sits under the replay bar. */
+body:has(.replay-bar) .topbar { top: 49px; }
+@media (max-width: 560px) {
+  .replay-bar { padding: 8px 16px; }
+  body:has(.replay-bar) .topbar { position: static; }
+}
+/* Nothing to drive in a replay: hide the operator buttons, keep the red-team list as a legend. */
+body:has(.replay-bar) :is(#kill-btn, #flatten-btn, #reset-btn, #demo-btn) { display: none; }
+body:has(.replay-bar) .redteam button { pointer-events: none; opacity: 0.7; }
