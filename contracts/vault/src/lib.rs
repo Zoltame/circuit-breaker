@@ -1,7 +1,9 @@
 //! Circuit Breaker vault: holds an AI agent's trading funds and enforces hard limits on-chain.
 //!
 //! Roles
-//! - owner: configures limits, venues, kill-switch; can withdraw.
+//! - owner: configures limits, venues, kill-switch; can withdraw. Usually a DAO (Sputnik), so every
+//!   owner action is a proposal voted by its council. Ownership moves in two steps (propose, accept)
+//!   so a typo can never hand the vault to an account nobody controls.
 //! - agent: holds only a function-call access key scoped to this contract, so it can call
 //!   `execute_order` and `trip_kill_switch` and nothing else. It cannot attach deposits, cannot
 //!   call other contracts, cannot transfer NEAR. The vault attaches deposits itself when needed.
@@ -48,6 +50,7 @@ pub struct TokenView {
 #[near(serializers = [json])]
 pub struct ConfigView {
     pub owner_id: AccountId,
+    pub pending_owner_id: Option<AccountId>,
     pub agent_id: AccountId,
     pub kill_switch: bool,
     pub venues: Vec<AccountId>,
@@ -65,6 +68,7 @@ pub struct Vault {
     venues: IterableSet<AccountId>,
     usage: LookupMap<String, DailyUsage>,
     orders_executed: u64,
+    pending_owner_id: Option<AccountId>,
 }
 
 fn blocked(rule: &str, detail: String) -> ! {
@@ -85,6 +89,7 @@ fn event(name: &str, data: near_sdk::serde_json::Value) {
 impl Vault {
     #[init]
     pub fn new(owner_id: AccountId, agent_id: AccountId) -> Self {
+        require!(owner_id != agent_id, "The agent cannot own the vault");
         Self {
             owner_id,
             agent_id,
@@ -93,6 +98,7 @@ impl Vault {
             venues: IterableSet::new(b"v"),
             usage: LookupMap::new(b"u"),
             orders_executed: 0,
+            pending_owner_id: None,
         }
     }
 
@@ -122,7 +128,26 @@ impl Vault {
 
     pub fn set_agent(&mut self, agent_id: AccountId) {
         self.assert_owner();
+        require!(agent_id != self.owner_id, "The agent cannot own the vault");
         self.agent_id = agent_id;
+    }
+
+    /// Step 1 of an ownership transfer, e.g. to a DAO. Nothing changes until the new owner accepts.
+    /// Proposing again replaces the pending owner; proposing the current owner cancels the transfer.
+    pub fn propose_owner(&mut self, new_owner_id: AccountId) {
+        self.assert_owner();
+        require!(new_owner_id != self.agent_id, "The agent cannot own the vault");
+        self.pending_owner_id = (new_owner_id != self.owner_id).then_some(new_owner_id);
+        event("owner_proposed", near_sdk::serde_json::json!({ "owner": self.owner_id, "pending": self.pending_owner_id }));
+    }
+
+    /// Step 2: called by the pending owner itself (for a DAO, through a voted FunctionCall proposal).
+    pub fn accept_owner(&mut self) {
+        let caller = env::predecessor_account_id();
+        require!(self.pending_owner_id.as_ref() == Some(&caller), "Only the pending owner can accept");
+        let previous = std::mem::replace(&mut self.owner_id, caller);
+        self.pending_owner_id = None;
+        event("owner_changed", near_sdk::serde_json::json!({ "previous": previous, "owner": self.owner_id }));
     }
 
     /// Only the owner can release the kill-switch.
@@ -249,6 +274,7 @@ impl Vault {
             .collect();
         ConfigView {
             owner_id: self.owner_id.clone(),
+            pending_owner_id: self.pending_owner_id.clone(),
             agent_id: self.agent_id.clone(),
             kill_switch: self.kill_switch,
             venues: self.venues.iter().cloned().collect(),
@@ -448,6 +474,62 @@ mod tests {
         v.set_kill_switch(false, "reviewed".into());
         ctx(agent(), DAY1);
         order(&mut v, 1);
+    }
+
+    fn dao() -> AccountId {
+        "council.sputnikv2.testnet".parse().unwrap()
+    }
+
+    #[test]
+    fn ownership_moves_only_when_the_new_owner_accepts() {
+        let mut v = setup();
+        v.propose_owner(dao());
+        assert_eq!(v.get_config().owner_id, owner()); // nothing changed yet
+        ctx(dao(), DAY1);
+        v.accept_owner();
+        let cfg = v.get_config();
+        assert_eq!(cfg.owner_id, dao());
+        assert_eq!(cfg.pending_owner_id, None);
+        // The DAO now holds every owner power, and the previous owner holds none.
+        v.set_kill_switch(true, "council vote".into());
+        ctx(owner(), DAY1);
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| v.set_kill_switch(false, "old key".into())));
+        assert!(res.is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the pending owner")]
+    fn nobody_else_can_accept_ownership() {
+        let mut v = setup();
+        v.propose_owner(dao());
+        ctx(agent(), DAY1);
+        v.accept_owner();
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the owner")]
+    fn agent_cannot_propose_an_owner() {
+        let mut v = setup();
+        ctx(agent(), DAY1);
+        v.propose_owner(agent());
+    }
+
+    #[test]
+    #[should_panic(expected = "The agent cannot own the vault")]
+    fn the_agent_can_never_become_owner() {
+        let mut v = setup();
+        v.propose_owner(agent());
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the pending owner")]
+    fn proposing_the_current_owner_cancels_a_transfer() {
+        let mut v = setup();
+        v.propose_owner(dao());
+        v.propose_owner(owner());
+        assert_eq!(v.get_config().pending_owner_id, None);
+        ctx(dao(), DAY1);
+        v.accept_owner();
     }
 
     #[test]

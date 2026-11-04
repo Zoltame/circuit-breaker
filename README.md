@@ -4,8 +4,10 @@
 Built at NEAR HACKATHON (Nov 1–14, 2026). Tracks: `security`, `agents`, `defi`.
 
 > Status: policy engine, executor, agent, on-chain vault, live dashboard, reduce-only exits and a multi-agent
-> (swarm) mode work. 100 tests. Execution is paper trading at real quotes; the vault runs on NEAR testnet.
-> Live testnet vault: [`guardrail-vault-sqjpi.testnet`](https://testnet.nearblocks.io/address/guardrail-vault-sqjpi.testnet).
+> (swarm) mode and a DAO-owned vault work. 122 tests. Execution is paper trading at real quotes; the vault runs
+> on NEAR testnet.
+> Live testnet vault: [`cbreaker-vault-7fvc5.testnet`](https://testnet.nearblocks.io/address/cbreaker-vault-7fvc5.testnet),
+> owned by the Sputnik DAO [`cbreaker-7fvc5.sputnikv2.testnet`](https://testnet.nearblocks.io/address/cbreaker-7fvc5.sputnikv2.testnet).
 
 ## The problem
 
@@ -31,6 +33,7 @@ A trading desk would never run a trader with flow caps only.
    settle through the vault on NEAR testnet before it is filled.
 5. Every decision is logged and shown on a **live dashboard** with a kill-switch button.
    Tripping it also freezes the vault on-chain; only the vault owner can unfreeze it.
+   The owner is a **Sputnik DAO**: unfreezing, raising a cap or withdrawing needs 2 of 3 council votes (see below).
 6. **Breaches never lock the account into a loss.** Once the kill-switch, the daily loss limit or the
    drawdown limit is hit, orders that only *sell* a held position still go through (reduce-only), and a
    drawdown breach unwinds every position by itself, even if the agent stops trading (see below).
@@ -43,6 +46,7 @@ A trading desk would never run a trader with flow caps only.
 |---|---|
 | Function-call access keys | Agent can call only the vault's trading methods, cannot attach deposits, cannot touch other contracts |
 | Smart contract (Rust, near-sdk) | Vault enforcing per-order / per-day caps, token and venue whitelists and a kill-switch the agent can trip but never release |
+| Sputnik DAO (v3, `sputnikv2.testnet` factory) | Owns the vault: every owner action is a FunctionCall proposal voted by a 3-member council (2 of 3) |
 | NEAR Intents 1Click API | Real cross-chain quotes used for pricing and the slippage rule |
 
 ## Try it
@@ -51,7 +55,7 @@ Requirements: Node ≥ 22, pnpm. No key is needed for the steps below (paper tra
 
 ```bash
 pnpm install
-pnpm test                         # 100 TS tests: policy engine, executor, agent
+pnpm test                         # 102 TS tests: policy engine, executor, agent
 pnpm propose buy wNEAR 500        # allowed: priced by a real 1Click dry quote, paper-filled
 pnpm propose buy wNEAR 2500       # blocked: max_order_size (25% of equity > 10%)
 pnpm propose buy SCAM 100         # blocked: asset_whitelist
@@ -124,8 +128,8 @@ pnpm dashboard --onchain --agent   # buys settle through the testnet vault; mome
     `VAULT BLOCK CB_BLOCKED:max_per_order`, with a link to the failed transaction on testnet
 - **Trip kill-switch** → status turns red, every order is blocked with `kill_switch`, and the vault is
   frozen on-chain. **Release (off-chain)** re-opens the engine, but buys still fail with
-  `CB_BLOCKED:kill_switch` until the vault owner releases it with their own key (the dashboard shows the
-  exact `near` command). A release means the operator accepts the loss so far: the drawdown peak is reset to
+  `CB_BLOCKED:kill_switch` until the vault owner releases it: for a DAO-owned vault, a council vote (the
+  dashboard shows the exact commands). A release means the operator accepts the loss so far: the drawdown peak is reset to
   the current equity, so the monitor does not re-trip on the same loss 10 s later.
 - Gauges: equity and PnL, drawdown from peak, daily loss, orders in the last hour, exposure per asset,
   each against its policy limit. The vault card reads `get_config` from the contract.
@@ -150,6 +154,38 @@ To reproduce with your own testnet accounts: fill `.env` from `.env.example`, th
 `pnpm contract build`, `pnpm vault:deploy 1 3`, `pnpm vault:attack` (needs Docker and near-cli-rs).
 Contract details: [`contracts/vault/README.md`](contracts/vault/README.md).
 
+### Governance: the vault is owned by a DAO
+
+Whoever owns the vault can unfreeze it, raise its caps or withdraw. A single owner key is a single point of
+failure, so the live vault is owned by a Sputnik DAO with a 3-member council and a 2-of-3 vote threshold.
+Ownership moves in two steps (`propose_owner`, then `accept_owner` called by the new owner itself), so a typo
+can never hand the vault to an account nobody controls, and the agent can never become owner.
+
+```bash
+pnpm dao create                    # DAO on the testnet factory, council from DAO_COUNCIL in .env
+pnpm dao handover                  # vault proposes the DAO; the council votes accept_owner
+pnpm vault:trip "drawdown"         # the agent's key freezes the vault
+pnpm dao propose set_kill_switch '{"on":false,"reason":"reviewed"}'
+pnpm dao approve 1 1               # 1 vote: still frozen
+pnpm dao approve 1 3               # 2 of 3: the DAO calls set_kill_switch, the vault is open again
+pnpm dao status
+```
+
+What happened on testnet (Nov 4, 2026):
+
+| Step | Result |
+|---|---|
+| Vault proposes the DAO as owner | [`6Su2juXs…`](https://testnet.nearblocks.io/txns/6Su2juXs8JbbscB7Rgg733SHZSLhnBPMb4YpGLJmz9yG) |
+| Proposal #0 `accept_owner`, 2 votes | approved, owner = `cbreaker-7fvc5.sputnikv2.testnet` |
+| Agent key trips the kill-switch | [`zHPGYqU4…`](https://testnet.nearblocks.io/txns/zHPGYqU4bSNR1SvN5DipzyP3QZSHEFYhTb7WtRvanTP) |
+| Former owner key tries to release it | `Only the owner can do this` |
+| Proposal #1 `set_kill_switch(false)`, after 1 vote | still frozen |
+| Proposal #1 after the 2nd vote | approved, vault open |
+| Agent buy through the engine afterwards | settled [`94N7t8CX…`](https://testnet.nearblocks.io/txns/94N7t8CXDgR6MxxrzdL5n565NGHYij98fSakRmDA4pkZ) |
+
+The attack table above was recorded on the first vault (`guardrail-vault-sqjpi.testnet`, same contract
+without ownership transfer); `pnpm vault:attack` replays it against the vault in `.env`.
+
 ### Real NEAR Intents quote
 
 ```bash
@@ -165,7 +201,9 @@ pnpm spike:1click       # 1 wNEAR -> USDC dry quote, nothing is signed or sent, 
   not exceed them, withdraw, attach a deposit or call another contract (see the attack table above).
 - A function-call key cannot attach a deposit, which is why funds sit in a vault contract rather than directly
   in an agent account. NEAR Intents has no testnet: executions are paper fills at real `dry: true` quotes.
-- The vault does not (yet) support transferring ownership, so its owner is a regular account, not a DAO.
+- The DAO governs the vault's **contract state**. The vault account still has a full-access key (used to deploy
+  it), and that key could redeploy the code. On mainnet that key must be deleted after deployment (or the
+  contract made upgradable only through the DAO); on testnet it is kept so the demo can be redeployed.
 
 ## Repository layout
 

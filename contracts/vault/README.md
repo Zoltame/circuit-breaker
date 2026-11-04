@@ -8,7 +8,8 @@ is bypassed or compromised.
 
 | Role | Can | Cannot |
 |---|---|---|
-| owner | set per-token caps, whitelist venues, set/release kill-switch, withdraw, change agent | — |
+| owner (a Sputnik DAO on testnet) | set per-token caps, whitelist venues, set/release kill-switch, withdraw, change agent, propose a new owner | make the agent owner |
+| pending owner | `accept_owner` (step 2 of a transfer) | anything else until it accepts |
 | agent | `execute_order` within caps to a whitelisted venue, `trip_kill_switch` | release the kill-switch, change caps, withdraw, anything else |
 
 The agent account holds **only a function-call access key** with
@@ -18,6 +19,15 @@ key management. The vault attaches the NEP-141 1 yoctoNEAR itself when it moves 
 
 Limits of that key (NEAR protocol): its `allowance` covers gas only and the key is unusable once
 spent; an account that has only function-call keys cannot transfer NEAR or add keys.
+
+## Ownership transfer (e.g. to a DAO)
+
+1. The owner calls `propose_owner(new_owner_id)`. Nothing changes yet; proposing the current owner cancels it.
+2. The new owner calls `accept_owner()` itself. For a Sputnik DAO that is a FunctionCall proposal voted by its
+   council: the vault sees the DAO as caller.
+
+Two steps mean a mistyped account can never receive the vault. `get_config` shows `owner_id` and
+`pending_owner_id`. The agent can be neither owner nor pending owner.
 
 ## Checks in `execute_order` (first failure panics with `CB_BLOCKED:<rule>`)
 
@@ -34,7 +44,7 @@ mainnet); without it, `ft_transfer`. Native NEAR uses a plain transfer.
 ## Build and test (Docker, any OS)
 
 ```bash
-pnpm contract test    # 14 unit tests + sandbox integration test
+pnpm contract test    # 19 unit tests + sandbox integration test
 pnpm contract build   # -> contracts/vault/out/vault.wasm
 ```
 

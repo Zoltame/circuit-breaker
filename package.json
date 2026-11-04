@@ -16,7 +16,9 @@
     "vault:deploy": "tsx --env-file=.env scripts/vault-deploy.ts",
     "vault:attack": "tsx --env-file=.env scripts/vault-attack.ts",
     "dashboard": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts",
-    "dashboard:swarm": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts --policy policies/swarm.yaml --data data-swarm --agent"
+    "dashboard:swarm": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts --policy policies/swarm.yaml --data data-swarm --agent",
+    "dao": "tsx --env-file=.env scripts/dao.ts",
+    "vault:trip": "tsx --env-file=.env scripts/vault-trip.ts"
   },
   "devDependencies": {
     "@circuit-breaker/agent": "workspace:*",

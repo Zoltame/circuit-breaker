@@ -183,6 +183,7 @@ function renderVault() {
   $("#vault").innerHTML = `
     <dl class="kv">
       <dt>Contract</dt><dd><code>${esc(id)}</code></dd>
+      <dt>Owner</dt><dd><a href="https://testnet.nearblocks.io/address/${esc(v.owner_id)}" target="_blank" rel="noopener"><code>${esc(v.owner_id)}</code></a>${isDao(v.owner_id) ? `<br><span class="muted">Sputnik DAO: owner actions need a council vote</span>` : ""}</dd>
       <dt>Kill-switch</dt><dd><span class="badge ${v.kill_switch ? "block" : "allow"}">${v.kill_switch ? "FROZEN" : "OPEN"}</span></dd>
       <dt>Cap per order</dt><dd>${perOrder} NEAR</dd>
       <dt>Spent today</dt><dd>${spent} / ${perDay} NEAR</dd>
@@ -194,9 +195,16 @@ function renderVault() {
   renderAccount();
   const banner = $("#vault-banner");
   banner.hidden = !v.kill_switch;
-  banner.innerHTML = `The on-chain vault is <b>frozen</b>. The agent can trip it but never release it. Only the owner can, with their own key:<br>
+  banner.innerHTML = isDao(v.owner_id)
+    ? `The on-chain vault is <b>frozen</b>. The agent can trip it but never release it. Its owner is the DAO <code>${esc(v.owner_id)}</code>:
+    a council member files a proposal and 2 of 3 members must approve it:<br>
+    <code>pnpm dao propose set_kill_switch '{"on":false,"reason":"reviewed"}'</code> then <code>pnpm dao approve &lt;id&gt; 1</code> and <code>pnpm dao approve &lt;id&gt; 2</code>`
+    : `The on-chain vault is <b>frozen</b>. The agent can trip it but never release it. Only the owner can, with their own key:<br>
     <code>near contract call-function as-transaction ${esc(id)} set_kill_switch json-args '{"on":false,"reason":"reviewed"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${esc(v.owner_id)} network-config testnet sign-with-keychain send</code>`;
 }
+
+/** Sputnik DAOs live under their factory account, e.g. name.sputnikv2.testnet. */
+const isDao = (account) => /\.sputnik[^.]*\.(testnet|near)$/.test(account);
 
 function renderPolicy() {
   const p = state.snapshot.policy;

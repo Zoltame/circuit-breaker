@@ -131,5 +131,31 @@ async fn vault_enforces_limits_on_chain() -> testresult::TestResult<()> {
         .await?
         .assert_success();
 
+    // 8. Ownership moves to a council (a DAO on testnet) in two steps; the old owner then has no power.
+    let council = create_account(&sandbox, "council.sandbox", 10).await?;
+    call("propose_owner", json!({ "new_owner_id": agent.account_id() }), owner.account_id().clone())
+        .send_to(&net)
+        .await?
+        .assert_failure();
+    call("propose_owner", json!({ "new_owner_id": council.account_id() }), owner.account_id().clone())
+        .send_to(&net)
+        .await?
+        .assert_success();
+    call("accept_owner", json!({}), agent.account_id().clone())
+        .send_to(&net)
+        .await?
+        .assert_failure();
+    call("accept_owner", json!({}), council.account_id().clone())
+        .send_to(&net)
+        .await?
+        .assert_success();
+    call("set_kill_switch", json!({ "on": true, "reason": "old owner" }), owner.account_id().clone())
+        .send_to(&net)
+        .await?
+        .assert_failure();
+    let config: Value = vault.call_function("get_config", ()).read_only().fetch_from(&net).await?.data;
+    assert_eq!(config["owner_id"], json!(council.account_id()));
+    assert_eq!(config["pending_owner_id"], Value::Null);
+
     Ok(())
 }
