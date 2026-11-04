@@ -18,7 +18,12 @@ function renderChips() {
     chip(true, "1Click live quotes"),
     chip(mode.onchain, mode.onchain ? "Vault on testnet" : "Vault off"),
     chip(mode.agent, mode.agent ? "Agent running" : "Agent idle"),
+    ...Object.entries(state.account?.shocks ?? mode.shocks ?? {}).map(([a, f]) => `<span class="chip shock">${esc(a)} shock ×${Number(f).toFixed(2)} (simulated)</span>`),
   ].join("");
+  const demo = $("#demo-btn");
+  demo.hidden = !mode.demo;
+  demo.disabled = Boolean(mode.demoRunning);
+  demo.textContent = mode.demoRunning ? "Demo running…" : "▶ Run demo";
 }
 
 function setGauge(id, value, limit, text) {
@@ -110,6 +115,9 @@ function onchainCell(link) {
 
 function row(e) {
   const t = new Date(e.timestamp).toLocaleTimeString("en-GB", { hour12: false });
+  if (e.type === "note") {
+    return `<tr class="note ${esc(e.tone ?? "info")}"><td class="time">${t}</td><td colspan="6">${e.act ? `<b>${esc(e.act)}</b> · ` : ""}${esc(e.text)}</td></tr>`;
+  }
   if (e.type === "kill_switch") {
     return `<tr><td class="time">${t}</td><td class="agent">${esc(e.by)}</td><td>Kill-switch ${e.on ? "ON" : "OFF"}</td>
       <td><span class="badge warn">${e.on ? "TRIP" : "RELEASE"}</span></td>
@@ -152,6 +160,15 @@ function renderFeed(fresh = false) {
   $("#feed").innerHTML = evs.map(row).join("");
   $("#feed-empty").hidden = evs.length > 0;
   if (fresh && $("#feed").firstElementChild) $("#feed").firstElementChild.classList.add("fresh");
+
+  const lastNote = state.events.findLast((e) => e.type === "note");
+  const caption = $("#demo-caption");
+  caption.hidden = !lastNote;
+  if (lastNote) {
+    const act = state.events.findLast((e) => e.type === "note" && e.act)?.act;
+    caption.className = `caption ${lastNote.tone ?? "info"}`;
+    caption.innerHTML = `${act ? `<b>${esc(act)}</b>` : ""}<span>${esc(lastNote.text)}</span>`;
+  }
 
   const decisions = state.events.filter((e) => e.type === "decision");
   const allow = decisions.filter((e) => e.verdict === "allow" && e.execution?.status !== "failed").length;
@@ -266,14 +283,17 @@ function connect() {
     state.events.push(event);
     state.account = account;
     renderAccount();
+    renderChips();
     renderFeed(true);
     if (event.type !== "decision" || event.execution?.onchain) void refreshVault();
   });
   es.addEventListener("account", (m) => {
     state.account = JSON.parse(m.data);
     renderAccount();
+    renderChips();
   });
   es.addEventListener("reset", () => void loadSnapshot());
+  es.addEventListener("demo", () => void loadSnapshot());
 }
 
 async function post(path, payload) {
@@ -325,6 +345,11 @@ $("#redteam").addEventListener("click", async (ev) => {
   } finally {
     btn.disabled = false;
   }
+});
+
+$("#demo-btn").addEventListener("click", async (ev) => {
+  ev.currentTarget.disabled = true;
+  await post("/api/demo");
 });
 
 $("#reset-btn").addEventListener("click", async () => {

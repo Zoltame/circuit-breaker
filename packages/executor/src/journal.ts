@@ -24,6 +24,8 @@ export type JournalEvent =
   | { type: "agent_quarantine"; timestamp: string; agentId: string; on: boolean; reason: string; drawdownPct?: number }
   /** Every held position is being sold through reduce-only exits (auto-flatten or operator request). */
   | { type: "flatten"; timestamp: string; by: string; reason: string; positions: string[] }
+  /** Narration of the scripted demo (`pnpm demo`): an act title or a step, shown in the feed. */
+  | { type: "note"; timestamp: string; act?: string; text: string; tone?: "info" | "attack" | "ok" }
   /** The agent's key called the vault directly, skipping the policy engine (red-team demo). */
   | { type: "vault_direct"; timestamp: string; label: string; amountUsd: number; onchain: OnchainLink };
 

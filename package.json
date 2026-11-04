@@ -18,7 +18,8 @@
     "dashboard": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts",
     "dashboard:swarm": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts --policy policies/swarm.yaml --data data-swarm --agent",
     "dao": "tsx --env-file=.env scripts/dao.ts",
-    "vault:trip": "tsx --env-file=.env scripts/vault-trip.ts"
+    "vault:trip": "tsx --env-file=.env scripts/vault-trip.ts",
+    "demo": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts --onchain --demo --data data-demo"
   },
   "devDependencies": {
     "@circuit-breaker/agent": "workspace:*",

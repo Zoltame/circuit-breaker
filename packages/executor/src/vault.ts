@@ -31,8 +31,8 @@ export interface VaultConfig {
 }
 
 export interface VaultGateway {
-  /** Sends the order's on-chain settlement leg to the whitelisted venue. */
-  executeOrder(orderId: string, amountUsd: number): Promise<OnchainResult>;
+  /** Sends the order's on-chain settlement leg to the whitelisted venue (or `venue`, for the red-team demo). */
+  executeOrder(orderId: string, amountUsd: number, venue?: string): Promise<OnchainResult>;
   /** Freezes the vault. Only the owner can release it. */
   tripKillSwitch(reason: string): Promise<OnchainResult>;
   explorerUrl(txHash: string): string;
@@ -74,11 +74,11 @@ export class NearVaultGateway implements VaultGateway {
     return `${this.o.explorerBase ?? "https://testnet.nearblocks.io/txns/"}${txHash}`;
   }
 
-  executeOrder(orderId: string, amountUsd: number): Promise<OnchainResult> {
+  executeOrder(orderId: string, amountUsd: number, venue = this.o.venueId): Promise<OnchainResult> {
     const amountYocto = nearToYoctoRounded(amountUsd * (this.o.nearPerUsd ?? 0.0002)).toString();
     return this.call(
       "execute_order",
-      { order_id: orderId, token: "near", amount: amountYocto, venue: this.o.venueId, msg: null },
+      { order_id: orderId, token: "near", amount: amountYocto, venue, msg: null },
       amountYocto,
     );
   }

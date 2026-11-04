@@ -11,5 +11,6 @@ export {
   type Quoter,
   type TokenInfo,
 } from "./oneclick.ts";
+export { ShockQuoter } from "./shock.ts";
 export { PaperBroker, QUOTE_ASSET, type Fill, type PaperState } from "./paper.ts";
 export { DATA_DIR, JOURNAL_FILE, POLICY_FILE, STATE_FILE, buildBreaker, type Built } from "./env.ts";

@@ -1,7 +1,8 @@
 // Circuit Breaker dashboard server. One process owns the CircuitBreaker (and optionally runs the agent),
 // streams journal events to browsers over SSE, and exposes the kill-switch and red-team actions.
 //
-// Usage: pnpm dashboard [--onchain] [--agent] [--port 8787]
+// Usage: pnpm dashboard [--onchain] [--agent] [--demo] [--port 8787]
+//   --demo shows a "Run demo" button that plays the scripted scenario (src/demo.ts); see `pnpm demo`.
 
 import { createReadStream, existsSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -17,6 +18,7 @@ import {
   type VaultConfig,
 } from "@circuit-breaker/executor";
 import type { Side } from "@circuit-breaker/policy-engine";
+import { demoRunning, runDemo } from "./demo.ts";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(`--${name}`);
@@ -45,7 +47,7 @@ const tee = (inner: Journal): Journal => ({
   read: () => inner.read(),
 });
 
-const { breaker, broker, vault } = buildBreaker({ onchain: flag("onchain"), wrapJournal: tee });
+const { breaker, broker, vault, market } = buildBreaker({ onchain: flag("onchain"), wrapJournal: tee });
 recent.push(...breaker.journalTail(200));
 
 // ---------------------------------------------------------------- account view
@@ -79,6 +81,8 @@ async function account() {
     agents,
     prices,
     killSwitch: s.killSwitch,
+    /** Simulated price shocks of the scripted demo (factor per asset); empty outside it. */
+    shocks: market.shocks,
     /** Orders that only sell an existing position are still accepted while the kill-switch is on. */
     reduceOnly: s.killSwitch || pct(s.dayStartEquityUsd - s.equityUsd, s.dayStartEquityUsd) >= p.maxDailyLossPct,
     limits: {
@@ -88,6 +92,14 @@ async function account() {
       maxExposurePct: p.maxExposurePct,
     },
   };
+}
+
+async function resetAccount(): Promise<void> {
+  broker.state = PaperBroker.fresh(START_CASH, Date.now()).state;
+  writeFileSync(JOURNAL_FILE, "");
+  recent.length = 0;
+  breaker.persist();
+  broadcast("reset", { account: await account() });
 }
 
 let vaultCache: { at: number; cfg: VaultConfig | null } = { at: 0, cfg: null };
@@ -197,7 +209,14 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && url.pathname === "/api/snapshot") {
       return json(res, 200, {
-        mode: { onchain: Boolean(vault), agent: agentRunning, vaultId: vault?.vaultId ?? null },
+        mode: {
+          onchain: Boolean(vault),
+          agent: agentRunning,
+          vaultId: vault?.vaultId ?? null,
+          demo: flag("demo"),
+          demoRunning: demoRunning(),
+          shocks: market.shocks,
+        },
         policy: breaker.policy,
         account: await account(),
         vault: await vaultConfig(),
@@ -250,12 +269,29 @@ const server = createServer(async (req, res) => {
       return json(res, 200, out ?? { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/api/reset") {
-      broker.state = PaperBroker.fresh(START_CASH, Date.now()).state;
-      writeFileSync(JOURNAL_FILE, "");
-      recent.length = 0;
-      breaker.persist();
-      broadcast("reset", { account: await account() });
+      await resetAccount();
       return json(res, 200, { ok: true });
+    }
+    if (req.method === "POST" && url.pathname === "/api/demo") {
+      if (demoRunning()) return json(res, 409, { error: "The demo is already running" });
+      // Runs in the background: the browser follows it through the live journal.
+      void runDemo({
+        breaker,
+        vault,
+        market,
+        reset: resetAccount,
+        equity: async () => {
+          const { prices } = await breaker.prices();
+          const s = broker.mark(prices, Date.now());
+          return { equityUsd: s.equityUsd, exposureUsd: Object.values(s.positionsUsd).reduce((a, b) => a + b, 0) };
+        },
+        pauseMs: Number(process.env.CB_DEMO_PAUSE_MS ?? 2_500),
+        daoEnabled: Boolean(process.env.DAO_ACCOUNT_ID && process.env.DAO_COUNCIL),
+      })
+        .catch((err) => console.error("demo:", err))
+        .finally(() => broadcast("demo", { running: false }));
+      broadcast("demo", { running: true });
+      return json(res, 202, { ok: true });
     }
     if (req.method === "GET") {
       const rel = url.pathname === "/" ? "index.html" : normalize(url.pathname).replace(/^[/\\]+/, "");

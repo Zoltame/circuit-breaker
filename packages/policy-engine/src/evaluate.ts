@@ -77,8 +77,8 @@ export function isReducing(order: Order, state: AccountState): boolean {
 /**
  * Rules waived for a reducing order. They guard against taking on new risk (kill-switch, loss limits,
  * order size) or against buying something unknown: a position that is already held can always be exited,
- * even if its asset has since left the whitelist. Execution-quality guards (frequency, slippage,
- * trading hours) still apply.
+ * even if its asset has since left the whitelist. Execution-quality guards (slippage, trading hours)
+ * still apply; frequency too, unless the account is already past a limit (see `inBreach`).
  */
 const WAIVED_WHEN_REDUCING: ReadonlySet<RuleId> = new Set<RuleId>([
   "kill_switch",
@@ -293,10 +293,28 @@ export const RULES: readonly (readonly [RuleId, Check])[] = [
   ["trading_hours", tradingHours],
 ];
 
+/**
+ * The account (or, in swarm mode, the agent) is past a limit, so exits are what matters now. Then even the
+ * frequency guard is waived for a reducing order: a runaway loop that used up the hourly quota must not keep
+ * the account locked in a crashing position for an hour. Exits can only shrink a held position, so they
+ * cannot loop for long.
+ */
+function inBreach({ order, state, policy }: EvaluateInput): boolean {
+  const risk = assessRisk(state, policy);
+  return (
+    policy.killSwitch ||
+    state.killSwitch ||
+    risk.drawdownBreached ||
+    risk.dailyLossBreached ||
+    Boolean(policy.swarm && state.agents?.[order.agentId]?.quarantined)
+  );
+}
+
 /** Pure, deterministic evaluation of one proposed order. Never mutates its inputs. */
 export function evaluateOrder(input: EvaluateInput): Decision {
   const base = { id: input.decisionId, timestamp: new Date(input.now).toISOString(), order: input.order };
   const reducing = isReducing(input.order, input.state);
+  const exitMode = reducing && inBreach(input);
   const waived: RuleId[] = [];
   // A drawdown breach must trip the kill-switch even when the order that revealed it is allowed.
   let activateKillSwitch = false;
@@ -305,7 +323,7 @@ export function evaluateOrder(input: EvaluateInput): Decision {
     const breach = check(input);
     if (!breach) continue;
     if (breach.activateKillSwitch) activateKillSwitch = true;
-    if (reducing && WAIVED_WHEN_REDUCING.has(rule)) {
+    if (reducing && (WAIVED_WHEN_REDUCING.has(rule) || (exitMode && rule === "order_frequency"))) {
       waived.push(rule);
       continue;
     }

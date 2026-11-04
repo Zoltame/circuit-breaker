@@ -329,11 +329,23 @@ describe("reduce-only exits", () => {
 
     const flood = run({ state, order: sell(500), now: NOW }).verdict; // sanity: passes alone
     expect(flood).toBe("allow");
-    const many = run({ state: { ...state, recentOrderTimes: [1, 2, 3, 4, 5].map((i) => NOW - i * 1_000) }, order: sell(500) });
-    expect(many).toMatchObject({ verdict: "block", triggeredRule: "order_frequency" });
-
     const night = run({ state, order: sell(500), now: Date.UTC(2026, 10, 4, 23, 0, 0) });
     expect(night).toMatchObject({ verdict: "block", triggeredRule: "trading_hours" });
+  });
+
+  it("applies the frequency guard to a sell while the account is healthy", () => {
+    const many = run({ state: { recentOrderTimes: [1, 2, 3, 4, 5].map((i) => NOW - i * 1_000) }, order: sell(500) });
+    expect(many).toMatchObject({ verdict: "block", triggeredRule: "order_frequency" });
+  });
+
+  it("waives the frequency guard for an exit once a limit is breached (a loop must not lock the account in a crash)", () => {
+    const recentOrderTimes = [1, 2, 3, 4, 5].map((i) => NOW - i * 1_000);
+    const exit = run({ state: { killSwitch: true, recentOrderTimes }, order: sell(500) });
+    expect(exit.verdict).toBe("allow");
+    expect(exit.waived).toEqual(["kill_switch", "order_frequency"]);
+    // A buy in the same state is still refused, by the kill-switch first.
+    expect(run({ state: { killSwitch: true, recentOrderTimes } })).toMatchObject({ verdict: "block", triggeredRule: "kill_switch" });
+
   });
 
   it("keeps the drawdown kill-switch effect even when a later guard blocks the exit", () => {

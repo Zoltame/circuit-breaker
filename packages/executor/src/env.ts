@@ -5,6 +5,7 @@ import { CircuitBreaker } from "./circuit-breaker.ts";
 import { JsonlJournal, type Journal } from "./journal.ts";
 import { OneClickClient } from "./oneclick.ts";
 import { PaperBroker, type PaperState } from "./paper.ts";
+import { ShockQuoter } from "./shock.ts";
 import { NearVaultGateway } from "./vault.ts";
 import { loadPolicyYaml } from "@circuit-breaker/policy-engine";
 import type { KeyPairString } from "near-api-js";
@@ -25,6 +26,8 @@ export interface Built {
   broker: PaperBroker;
   journal: Journal;
   vault: NearVaultGateway | undefined;
+  /** Real 1Click prices, plus an optional simulated shock for the scripted demo. */
+  market: ShockQuoter;
 }
 
 /** `onchain`: buys must also settle through the testnet vault with the agent's function-call key. */
@@ -53,13 +56,16 @@ export function buildBreaker(opts: { onchain?: boolean; wrapJournal?: (j: Journa
     });
   }
 
+  const market = new ShockQuoter(
+    new OneClickClient({ baseUrl: process.env.ONECLICK_BASE_URL, jwt: process.env.ONECLICK_JWT, tokenCacheMs: 5_000 }),
+  );
   const breaker = new CircuitBreaker({
     policy: loadPolicyYaml(readFileSync(POLICY_FILE, "utf8")),
     broker,
-    quoter: new OneClickClient({ baseUrl: process.env.ONECLICK_BASE_URL, jwt: process.env.ONECLICK_JWT, tokenCacheMs: 5_000 }),
+    quoter: market,
     journal,
     vault,
     onStateChange: (s) => writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)),
   });
-  return { breaker, broker, journal, vault };
+  return { breaker, broker, journal, vault, market };
 }
