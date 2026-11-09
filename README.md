@@ -227,6 +227,7 @@ What happened on testnet (Nov 4, 2026):
 | Proposal #1 `set_kill_switch(false)`, after 1 vote | still frozen |
 | Proposal #1 after the 2nd vote | approved, vault open |
 | Agent buy through the engine afterwards | settled [`94N7t8CX…`](https://testnet.nearblocks.io/txns/94N7t8CXDgR6MxxrzdL5n565NGHYij98fSakRmDA4pkZ) |
+| Vault's full-access key deleted (Nov 9) | the account has no key left: no single party can change the code |
 
 The attack table above was recorded on the first vault (`guardrail-vault-sqjpi.testnet`, same contract
 without ownership transfer); `pnpm vault:attack` replays it against the vault in `.env`.
@@ -280,9 +281,10 @@ pnpm spike:1click       # 1 wNEAR -> USDC dry quote, nothing is signed or sent, 
   last anchor (at most 9, or none right after an incident) are only protected by the local chain, and lines
   written before the chain existed (older journals) are not protected at all. Anchoring proves integrity, not
   truth: a compromised engine could log lies from the start, which is why the vault enforces its own caps.
-- The DAO governs the vault's **contract state**. The vault account still has a full-access key (used to deploy
-  it), and that key could redeploy the code. On mainnet that key must be deleted after deployment (or the
-  contract made upgradable only through the DAO); on testnet it is kept so the demo can be redeployed.
+- The live vault account has **no access key at all**: its deployment key was deleted on Nov 9, 2026, so nobody
+  can redeploy the code or sign as the vault, and owner actions can only come from the DAO. The trade-off: the
+  contract can no longer be upgraded, so a bug would mean a new vault. To check, run
+  `near account list-keys cbreaker-vault-7fvc5.testnet network-config testnet now`.
 
 ## Repository layout
 
