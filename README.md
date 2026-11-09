@@ -131,7 +131,7 @@ pnpm demo        # full version, needs your own testnet accounts in .env (see .e
 
 The full version on the live vault is at [circuit-breaker-psi.vercel.app](https://circuit-breaker-psi.vercel.app) as a replay.
 
-About two minutes, narrated in the dashboard, everything real except the agent's "brain" and the crash:
+About two and a half minutes, narrated in the dashboard, everything real except the agent's "brain" and the crash:
 
 | Act | What happens | Stopped by |
 |---|---|---|

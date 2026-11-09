@@ -273,9 +273,8 @@ const RED_TEAM: Record<string, { label: string; run: () => Promise<unknown> }> =
         timestamp: new Date().toISOString(),
         tone: caught ? "ok" : "attack",
         text:
-          `Attacker rewrote entry #${forged.editedSeq} (${order.side} $${order.notionalUsd} ${order.asset}: blocked by ${String(target.triggeredRule)}, now "approved") ` +
-          `and recomputed every hash after it. Local chain alone: ${local.error ? "broken" : "looks valid"}. ` +
-          `Against the vault anchors: ${caught ? "TAMPERED. " : ""}${check.message}. (Checked on a forged copy; the real journal is untouched.)`,
+          `Entry #${forged.editedSeq} forged: "blocked by ${String(target.triggeredRule)}" now reads "approved", every later hash recomputed. ` +
+          `Local chain alone: ${local.error ? "broken" : "looks valid"}. Vault anchors: ${caught ? "TAMPERED" : check.verdict}. (Forged copy; the real journal is untouched.)`,
       });
       return { editedSeq: forged.editedSeq, localChainValid: !local.error, ...summary(check) };
     },
