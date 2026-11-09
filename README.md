@@ -206,6 +206,9 @@ failure, so the live vault is owned by a Sputnik DAO with a 3-member council and
 Ownership moves in two steps (`propose_owner`, then `accept_owner` called by the new owner itself), so a typo
 can never hand the vault to an account nobody controls, and the agent can never become owner.
 
+Limit of this demo: the three council keys are all held by the builder, on one machine. The contract enforces
+two distinct votes, but real separation needs three independent people or devices.
+
 ```bash
 pnpm dao create                    # DAO on the testnet factory, council from DAO_COUNCIL in .env
 pnpm dao handover                  # vault proposes the DAO; the council votes accept_owner
@@ -227,7 +230,7 @@ What happened on testnet (Nov 4, 2026):
 | Proposal #1 `set_kill_switch(false)`, after 1 vote | still frozen |
 | Proposal #1 after the 2nd vote | approved, vault open |
 | Agent buy through the engine afterwards | settled [`94N7t8CX…`](https://testnet.nearblocks.io/txns/94N7t8CXDgR6MxxrzdL5n565NGHYij98fSakRmDA4pkZ) |
-| Vault's full-access key deleted (Nov 9) | the account has no key left: no single party can change the code |
+| Vault's full-access key deleted (Nov 9) | the account has no key left: no single key can change the code |
 
 The attack table above was recorded on the first vault (`guardrail-vault-sqjpi.testnet`, same contract
 without ownership transfer); `pnpm vault:attack` replays it against the vault in `.env`.
