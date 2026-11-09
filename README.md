@@ -4,7 +4,7 @@
 Built at NEAR HACKATHON (Nov 1–14, 2026). Tracks: `security`, `agents`, `defi`.
 
 > Status: policy engine, executor, agent, on-chain vault, live dashboard, reduce-only exits and a multi-agent
-> (swarm) mode, a DAO-owned vault, a tamper-evident journal anchored on-chain and a scripted prompt-injection demo work. 145 tests. Execution is paper trading at real quotes; the vault runs
+> (swarm) mode, a DAO-owned vault, a tamper-evident journal anchored on-chain and a scripted prompt-injection demo work. 146 tests. Execution is paper trading at real quotes; the vault runs
 > on NEAR testnet.
 > **Watch the demo:** [circuit-breaker-psi.vercel.app](https://circuit-breaker-psi.vercel.app), a replay of a recorded run on NEAR testnet
 > (every transaction link is real).
@@ -56,20 +56,23 @@ A trading desk would never run a trader with flow caps only.
 
 ## Try it
 
-Requirements: Node ≥ 22, pnpm. No key is needed for the steps below (paper trading on real prices).
+Requirements: Node ≥ 22.9, pnpm. No key is needed for the steps below (paper trading on real prices).
 
 ```bash
 pnpm install
-pnpm test                         # 119 TS tests: policy engine, executor, agent
+pnpm test                         # 120 TS tests: policy engine, executor, agent
 pnpm propose buy wNEAR 500        # allowed: priced by a real 1Click dry quote, paper-filled
 pnpm propose buy wNEAR 2500       # blocked: max_order_size (25% of equity > 10%)
 pnpm propose buy SCAM 100         # blocked: asset_whitelist
 pnpm propose buy wNEAR 300 3      # blocked: max_leverage (3x > 1x)
-pnpm agent 30 10                  # momentum agent, 30 ticks every 10 s, live prices
+pnpm agent 30 10                  # momentum agent, 30 ticks every 10 s, live prices (5 min)
+pnpm demo:paper                   # http://localhost:8787, click "Run demo": acts 1-3 without any key
 ```
 
 - Each `propose` prints the decision record: `verdict`, `triggeredRule`, `reason`, `observed`, `limit`,
   the quote used (`amountInUsd` / `amountOutUsd`) and the paper fill.
+- `pnpm agent` prints one line per order. It only trades when the price moved more than 5 bps over 3 ticks, so a
+  calm market can mean few orders or none.
 - Every decision is appended to `data/decisions.jsonl`; the paper account lives in `data/state.json`
   (starts at 10,000 USDC). Delete `data/` to reset.
 - Blocked orders never reach the quote service or the broker.
@@ -96,6 +99,8 @@ Circuit Breaker separates *adding* risk from *removing* it:
   handled even if the agent proposes nothing. If an exit fails (bad quote), it is retried after 60 s.
 - The monitor does nothing when a held asset has no price: a price-feed outage must not look like a crash.
 - `Flatten all` in the dashboard (or `breaker.flatten()`) sells everything without touching the kill-switch.
+  Exits of a flatten bypass the frequency guard even on a healthy account: the operator can always get out after a
+  runaway loop. Only the flatten itself can set this; an agent's own orders cannot.
 
 ### Swarm mode (several agents, one risk desk)
 
@@ -120,8 +125,11 @@ swarm:
 ### Scripted demo: a prompt-injected agent
 
 ```bash
-pnpm demo        # dashboard on a separate paper account (data-demo/), vault on testnet; click "Run demo"
+pnpm demo:paper  # no key needed: acts 1-3 on a paper account, without the on-chain steps
+pnpm demo        # full version, needs your own testnet accounts in .env (see .env.example); click "Run demo"
 ```
+
+The full version on the live vault is at [circuit-breaker-psi.vercel.app](https://circuit-breaker-psi.vercel.app) as a replay.
 
 About two minutes, narrated in the dashboard, everything real except the agent's "brain" and the crash:
 
@@ -158,10 +166,11 @@ pnpm dashboard --onchain --agent   # buys settle through the testnet vault; mome
   - *Oversized order* → `BLOCK max_order_size`
   - *Token outside the whitelist* → `BLOCK asset_whitelist`
   - *5x leverage* → `BLOCK max_leverage`
-  - *Runaway loop (15 orders)* → 10 filled, then `BLOCK order_frequency` (limit 12/hour)
+  - *Runaway loop (15 orders)* → 12 filled on a fresh account, then `BLOCK order_frequency` (limit 12/hour)
   - *Unlisted agent* / *keeps buying past its own budget* (swarm policy only) → `BLOCK agent_budget`
   - *Skip the engine* (needs `--onchain`) → the agent's key calls the vault directly for $10,000 →
     `VAULT BLOCK CB_BLOCKED:max_per_order`, with a link to the failed transaction on testnet
+  - *Rewrite history* (needs `--onchain`) → forges a copy of the journal, caught by the vault anchors: `TAMPERED`
 - **Trip kill-switch** → status turns red, every order is blocked with `kill_switch`, and the vault is
   frozen on-chain. **Release (off-chain)** re-opens the engine, but buys still fail with
   `CB_BLOCKED:kill_switch` until the vault owner releases it: for a DAO-owned vault, a council vote (the
@@ -286,7 +295,7 @@ packages/
   dashboard/         server (SSE, kill-switch, red team) + static UI
 contracts/vault/     on-chain vault (Rust, near-sdk) + tests
 scripts/             propose, agent, vault deploy/attack, 1Click spike
-docs/                notes and architecture
+docs/                design notes written before and during the build
 ```
 
 ## Libraries

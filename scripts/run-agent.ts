@@ -12,6 +12,7 @@ const intervalMs = Number(intervalArg ?? 10) * 1000;
 
 const { breaker, broker } = buildBreaker({ onchain });
 const stop = new AbortController();
+let orders = 0;
 process.on("SIGINT", () => stop.abort());
 
 console.log(`agent: ${ticks} ticks every ${intervalMs / 1000}s, policy ${POLICY_FILE}${onchain ? ", on-chain vault" : ""}`);
@@ -25,9 +26,11 @@ await runAgent({
   intervalMs,
   signal: stop.signal,
   onDecision: (ev) => {
+    orders++;
     const tag = ev.verdict === "allow" ? "ALLOW" : "BLOCK";
     const what = `${ev.order.side} $${ev.order.notionalUsd} ${ev.order.asset}`;
     const detail = ev.verdict === "allow" ? `${ev.execution?.status ?? ""} equity $${ev.equityUsd.toFixed(2)}` : ev.reason;
     console.log(`${ev.timestamp} ${tag} ${what.padEnd(24)} ${detail}`);
   },
 });
+console.log(`agent: done, ${orders} orders proposed. It only trades when the price moved more than 5 bps over 3 ticks, so a calm market can mean none.`);

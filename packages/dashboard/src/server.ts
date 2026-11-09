@@ -80,7 +80,16 @@ const tee = (inner: Journal): Journal => ({
   head: () => inner.head?.(),
 });
 
-const { breaker, broker, vault, market } = buildBreaker({ onchain: flag("onchain"), wrapJournal: tee });
+function boot() {
+  try {
+    return buildBreaker({ onchain: flag("onchain"), wrapJournal: tee });
+  } catch (err) {
+    console.error(`\n${err instanceof Error ? err.message : String(err)}`);
+    console.error("No testnet accounts? `pnpm dashboard` and `pnpm demo:paper` need no key; see .env.example otherwise.\n");
+    process.exit(1);
+  }
+}
+const { breaker, broker, vault, market } = boot();
 recent.push(...breaker.journalTail(200));
 
 // ---------------------------------------------------------------- account view

@@ -10,6 +10,11 @@ export interface EvaluateInput {
   /** Evaluation time, epoch ms. Passed in so the function stays pure. */
   now: number;
   decisionId: string;
+  /**
+   * Set by the executor for the exits of a flatten (operator button or automatic), never from an agent's order.
+   * Such an exit also bypasses the frequency guard: the operator must be able to get out after a runaway loop.
+   */
+  flattening?: boolean;
 }
 
 type Value = number | string | boolean | null;
@@ -314,7 +319,7 @@ function inBreach({ order, state, policy }: EvaluateInput): boolean {
 export function evaluateOrder(input: EvaluateInput): Decision {
   const base = { id: input.decisionId, timestamp: new Date(input.now).toISOString(), order: input.order };
   const reducing = isReducing(input.order, input.state);
-  const exitMode = reducing && inBreach(input);
+  const exitMode = reducing && (input.flattening === true || inBreach(input));
   const waived: RuleId[] = [];
   // A drawdown breach must trip the kill-switch even when the order that revealed it is allowed.
   let activateKillSwitch = false;

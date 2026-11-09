@@ -184,6 +184,19 @@ describe("reduce-only exits and auto-flatten", () => {
     return ctx;
   }
 
+  it("lets the operator flatten after a loop used up the frequency limit, but not the agent's own sell", async () => {
+    const { cb, broker } = setup({ ...open, maxOrdersPerHour: 2, autoFlatten: false });
+    for (let i = 0; i < 2; i++) await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 1_000 });
+
+    const own = await cb.submit({ agentId: "a", side: "sell", asset: "wNEAR", notionalUsd: 100 });
+    expect(own).toMatchObject({ verdict: "block", triggeredRule: "order_frequency" });
+
+    const [exit] = await cb.flatten("operator", "get out");
+    expect(exit).toMatchObject({ verdict: "allow", waived: ["order_frequency"] });
+    expect(broker.state.holdings.wNEAR).toBe(0);
+    expect(broker.state.killSwitch).toBe(false);
+  });
+
   it("lets the agent sell its position while the kill-switch is on", async () => {
     const { cb, broker } = setup({ ...open, autoFlatten: false });
     await cb.submit({ agentId: "a", side: "buy", asset: "wNEAR", notionalUsd: 4_000 });

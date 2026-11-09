@@ -72,7 +72,7 @@ async function script(ctx: DemoContext): Promise<void> {
   }
 
   // ------------------------------------------------------------------ act 1
-  note(ctx, "A normal trading day. The agent trades wNEAR at real NEAR Intents (1Click) quotes; every buy must also settle through the vault on NEAR testnet.", "info", "Act 1 · Normal trading");
+  note(ctx, `A normal trading day. The agent trades wNEAR at real NEAR Intents (1Click) quotes${vault ? "; every buy must also settle through the vault on NEAR testnet" : ", paper fills only (no vault in this mode)"}.`, "info", "Act 1 · Normal trading");
   await pause();
   // Two 9.5% buys: under the 10% order cap, 19% exposure, room left under the 30% exposure cap.
   for (let i = 0; i < 2; i++) {
@@ -110,7 +110,7 @@ async function script(ctx: DemoContext): Promise<void> {
     });
   }
   await pause();
-  note(ctx, "The injection got nothing: wrong token, oversized, leveraged, too frequent, and the vault refused the transfer on-chain.", "ok");
+  note(ctx, `The injection got nothing: wrong token, oversized, leveraged, too frequent${vault ? ", and the vault refused the transfer on-chain" : ""}.`, "ok");
 
   // ------------------------------------------------------------------ act 3
   await pause(1.5);
@@ -127,7 +127,7 @@ async function script(ctx: DemoContext): Promise<void> {
   // The server's 10 s monitor would catch the breach anyway; running it now keeps the narration in order.
   await breaker.monitor();
   await pause();
-  note(ctx, "Drawdown limit hit: kill-switch on, every position sold with reduce-only exits, and the vault frozen on-chain by the agent's own key.", "ok");
+  note(ctx, `Drawdown limit hit: kill-switch on, every position sold with reduce-only exits${vault ? ", and the vault frozen on-chain by the agent's own key" : ""}.`, "ok");
   await pause();
   await buy(100);
   if (vault) {
@@ -170,6 +170,7 @@ async function script(ctx: DemoContext): Promise<void> {
     await ctx.rewriteHistory();
     await pause();
   }
+  if (!vault) note(ctx, "Paper mode: the on-chain steps (vault refusal, freeze, DAO vote, journal anchors) need testnet accounts. They are in the hosted replay.", "info");
   note(ctx, "End of the demo. The account took the crash loss, but the injected agent moved nothing it was not allowed to move.", "ok");
 }
 

@@ -4,7 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@12.14.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.9"
   },
   "scripts": {
     "test": "pnpm -r test",
@@ -20,6 +20,7 @@
     "dao": "tsx --env-file=.env scripts/dao.ts",
     "vault:trip": "tsx --env-file=.env scripts/vault-trip.ts",
     "demo": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts --onchain --demo --data data-demo",
+    "demo:paper": "tsx --env-file-if-exists=.env packages/dashboard/src/server.ts --demo --data data-paper",
     "replay:build": "tsx scripts/build-replay.ts",
     "agent:rotate-key": "tsx --env-file=.env scripts/agent-key.ts",
     "journal:verify": "tsx --env-file-if-exists=.env scripts/journal-verify.ts"

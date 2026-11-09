@@ -141,7 +141,7 @@ export class CircuitBreaker {
     const decisionId = this.newId();
 
     // Pass 1 without a quote: if any rule other than slippage blocks, don't even ask for a price.
-    let decision: Decision = evaluateOrder({ order, state, policy, now, decisionId });
+    let decision: Decision = evaluateOrder({ order, state, policy, now, decisionId, flattening: internal });
     let fill: { units: number; cashDelta: number } | null = null;
 
     if (decision.verdict === "block" && decision.triggeredRule === "max_slippage") {
@@ -149,7 +149,7 @@ export class CircuitBreaker {
       if (quoted) {
         order.quote = { amountInUsd: quoted.amountInUsd, amountOutUsd: quoted.amountOutUsd };
         fill = { units: quoted.units, cashDelta: quoted.cashDelta };
-        decision = evaluateOrder({ order, state, policy, now, decisionId });
+        decision = evaluateOrder({ order, state, policy, now, decisionId, flattening: internal });
       }
     }
 
