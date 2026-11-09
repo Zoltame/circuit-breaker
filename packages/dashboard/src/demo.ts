@@ -110,7 +110,7 @@ async function script(ctx: DemoContext): Promise<void> {
     });
   }
   await pause();
-  note(ctx, `The injection got nothing: wrong token, oversized, leveraged, too frequent${vault ? ", and the vault refused the transfer on-chain" : ""}.`, "ok");
+  note(ctx, `Everything outside the limits was refused: wrong token, oversized, leveraged, too frequent${vault ? ", and the transfer to the attacker, on-chain" : ""}. The small orders that passed stayed within the risk limits.`, "ok");
 
   // ------------------------------------------------------------------ act 3
   await pause(1.5);
@@ -168,7 +168,7 @@ async function script(ctx: DemoContext): Promise<void> {
     note(ctx, "After the incident, someone with access to the server wants the record to look better: they edit the journal so a blocked order reads “approved”, then recompute every hash.", "attack", "Act 5 · The audit trail");
     await pause();
     await ctx.rewriteHistory();
-    await pause();
+    await pause(3); // the verdict is the point of this act: leave time to read it
   }
   if (!vault) note(ctx, "Paper mode: the on-chain steps (vault refusal, freeze, DAO vote, journal anchors) need testnet accounts. They are in the hosted replay.", "info");
   note(ctx, "End of the demo. The account took the crash loss, but the injected agent moved nothing it was not allowed to move.", "ok");
